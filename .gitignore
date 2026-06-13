@@ -1,0 +1,15 @@
+# Compiled binaries
+claude-hook-fast
+codex-hook
+hearth-loom-hook
+tools/claude-hooks/claude-hook-fast
+
+# Go build artifacts
+/bin/
+*.test
+*.out
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
