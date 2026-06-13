@@ -68,6 +68,19 @@ Invoked as: `claude-hook-fast <subcommand>` with JSON on stdin.
 
 **Stdout parse error → exit 0 silent** (matches JS behavior — hooks must never block tool calls).
 
+## Emitted Signals (Reflexarc / nervous-bus)
+
+`nbus-activity` (PostToolUse → `bus.agent.activity.v1`) emits enriched signals
+beyond the baseline fields. See [`docs/emitted-signals.md`](../../docs/emitted-signals.md)
+for the full field reference, including:
+
+- **Token usage**: `input_tokens`, `output_tokens`, `cache_read_tokens`,
+  `cache_write_tokens`, `model` (from transcript tail-read, < 0.5 ms/call)
+- **Structured outcome**: `tool_use_id`, `tool_is_error`, `tool_error_type`
+
+The doc also includes the exact schema additions for `bus.agent.activity.v1`
+and the reflex-recorder feature-extraction snippets.
+
 ## Rollout Plan
 
 1. Copy binary to `~/.local/bin/`

@@ -63,6 +63,15 @@ type HookInput struct {
 	SubagentType string `json:"subagent_type"`
 	SubagentID   string `json:"subagent_id"`
 
+	// PostToolUse enrichment fields.
+	// tool_use_id is the stable ID for the individual tool invocation; it
+	// matches the toolUseID recorded in the transcript hook-attachment entry.
+	// Passed by Claude Code on stdin since ~2.0.
+	ToolUseID string `json:"tool_use_id"`
+	// tool_is_error is true when the tool returned an error result (tool_response
+	// carries an error payload). Passed by Claude Code on stdin since ~2.1.
+	ToolIsError bool `json:"tool_is_error"`
+
 	// opencode-shape aliases. Populated only when the canonical field
 	// is empty (Parse() handles the merge).
 	SessionIDAlt string `json:"sessionID"`

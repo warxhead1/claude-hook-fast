@@ -49,6 +49,7 @@ import (
 	"github.com/warxhead1/claude-hook-fast/internal/hooks/hooklog"
 	"github.com/warxhead1/claude-hook-fast/internal/hooks/nbuspub"
 	"github.com/warxhead1/claude-hook-fast/internal/hooks/project"
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/transcript"
 )
 
 // execCmd is a thin alias so the linter's G204 check sees a typed
@@ -134,6 +135,20 @@ func publishNbusEnvelope(channel string, env map[string]any, sourceProject strin
 
 // cmdNbusActivity replaces zzy-nbus-activity.sh — PostToolUse → bus.agent.activity.v1.
 // Skips Grep/Glob to keep the signal lean.
+//
+// Enrichment (additive, all fields optional so existing consumers are unaffected):
+//   - tool_use_id        — stable tool-invocation ID (from hook stdin, Claude Code ~2.0+)
+//   - tool_is_error      — bool: true when the tool returned an error result
+//   - tool_error_type    — short error label extracted from tool_response when tool_is_error
+//   - input_tokens       — API call input token count (from transcript tail)
+//   - output_tokens      — API call output token count (from transcript tail)
+//   - cache_read_tokens  — cache-read input tokens (from transcript tail)
+//   - cache_write_tokens — cache-creation input tokens (from transcript tail)
+//   - model              — model id (from transcript tail, e.g. "claude-sonnet-4-6")
+//
+// Token fields are emitted as integers when non-zero, omitted when zero or
+// unavailable (transcript unreadable, stale, pre-Claude Code 1.0.84).
+// Cost is intentionally NOT computed here — that belongs downstream.
 func cmdNbusActivity() {
 	in, _ := readStdinForHook()
 	if in.ToolName == "" {
@@ -148,7 +163,61 @@ func cmdNbusActivity() {
 	env["tool_name"] = in.ToolName
 	env["tool_summary"] = boundedToolSummary(in.ToolInput)
 	env["tool_response_summary"] = boundedToolResponseSummary(in.ToolResponse)
+
+	// --- Enrichment block ---
+
+	// tool_use_id: stable per-invocation ID, present in Claude Code ~2.0+ stdin.
+	if in.ToolUseID != "" {
+		env["tool_use_id"] = in.ToolUseID
+	}
+
+	// tool_is_error + tool_error_type: structured outcome for failure detection.
+	if in.ToolIsError {
+		env["tool_is_error"] = true
+		if errType := extractToolErrorType(in.ToolResponse); errType != "" {
+			env["tool_error_type"] = errType
+		}
+	}
+
+	// Token usage: cheap tail-read of the transcript (last 8 KB only).
+	// Falls through silently if the transcript is unavailable or stale.
+	if in.TranscriptPath != "" {
+		if u := transcript.LatestUsage(in.TranscriptPath); !u.IsZero() {
+			env["input_tokens"] = u.InputTokens
+			env["output_tokens"] = u.OutputTokens
+			if u.CacheReadInputTokens > 0 {
+				env["cache_read_tokens"] = u.CacheReadInputTokens
+			}
+			if u.CacheCreationInputTokens > 0 {
+				env["cache_write_tokens"] = u.CacheCreationInputTokens
+			}
+			if u.Model != "" {
+				env["model"] = u.Model
+			}
+		}
+	}
+
 	publishNbusEnvelope(chanAgentActivity, env, can)
+}
+
+// extractToolErrorType returns a short label from a tool_response error payload.
+// Claude Code wraps tool errors as {"type":"tool_result","is_error":true,"content":"..."}.
+// We look for a type-discriminator or fall back to "error". Returns "" when the
+// response is not parseable as an error.
+func extractToolErrorType(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ""
+	}
+	// Prefer an explicit "type" field if present and non-empty.
+	if t, ok := m["type"].(string); ok && t != "" && t != "tool_result" {
+		return truncate(t, 64)
+	}
+	// Fall back to "error" as a generic label.
+	return "error"
 }
 
 func cmdNbusSessionStart() {
