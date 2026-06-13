@@ -134,7 +134,7 @@ func publishNbusEnvelope(channel string, env map[string]any, sourceProject strin
 }
 
 // cmdNbusActivity replaces zzy-nbus-activity.sh — PostToolUse → bus.agent.activity.v1.
-// Skips Grep/Glob to keep the signal lean.
+// Emits all tools (incl. Read/Grep/Glob) so navigation-based detectors get data.
 //
 // Enrichment (additive, all fields optional so existing consumers are unaffected):
 //   - tool_use_id        — stable tool-invocation ID (from hook stdin, Claude Code ~2.0+)
@@ -154,10 +154,9 @@ func cmdNbusActivity() {
 	if in.ToolName == "" {
 		return
 	}
-	switch in.ToolName {
-	case "Grep", "Glob":
-		return
-	}
+	// Read/Grep/Glob ARE emitted: the Reflexarc file-reads-to-finding and
+	// reread-same-file detectors depend on navigation events. (Was: skipped to
+	// keep the signal lean; that starved 2 detectors — see nervous-bus jvzkn.3.)
 
 	env, can := baseEnvelope(in, "tool_call", in.AgentKind())
 	env["tool_name"] = in.ToolName
