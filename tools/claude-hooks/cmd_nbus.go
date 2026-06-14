@@ -161,7 +161,7 @@ func cmdNbusActivity() {
 
 	env, can := baseEnvelope(in, "tool_call", in.AgentKind())
 	env["tool_name"] = in.ToolName
-	env["tool_summary"] = boundedToolSummary(in.ToolInput)
+	env["tool_summary"] = boundToolSummary(in.ToolName, in.ToolInput)
 	env["tool_response_summary"] = boundedToolResponseSummary(in.ToolResponse)
 
 	// --- Enrichment block ---
@@ -958,9 +958,38 @@ func truncate(s string, max int) string {
 	return string(runes[:max])
 }
 
-// boundedToolSummary returns the first 200 chars of the compacted
-// tool_input. Empty when no input was supplied.
+// largeInputTools carry semantically-rich, multi-KB tool_input (a dispatch
+// prompt) — for these we keep a bigger tool_summary so the dispatched directive
+// is visible on the bus, not clipped to its opening line. Ordinary tool inputs
+// (Bash/Read/Edit) are compact JSON that fits in the default bound, so a global
+// raise would just waste bytes. Empirically (dispatch-observability-audit): only
+// ~0.7% of activity events are dispatches; raising just these 200->1000 costs
+// ~0.08% of debug.jsonl growth while lifting prompt-byte capture 5%->25%.
+var largeInputTools = map[string]bool{"Agent": true, "Task": true, "Workflow": true}
+
+const (
+	toolSummaryBound      = 200  // default: compact tool inputs
+	toolSummaryBoundLarge = 1000 // dispatch prompts (largeInputTools)
+)
+
+// boundToolSummary picks the bound from the tool name, then summarizes.
+func boundToolSummary(toolName string, raw json.RawMessage) string {
+	n := toolSummaryBound
+	if largeInputTools[toolName] {
+		n = toolSummaryBoundLarge
+	}
+	return boundedToolSummaryN(raw, n)
+}
+
+// boundedToolSummary returns the first 200 chars of the compacted tool_input.
+// Retained for callers that don't vary by tool; equivalent to the default bound.
 func boundedToolSummary(raw json.RawMessage) string {
+	return boundedToolSummaryN(raw, toolSummaryBound)
+}
+
+// boundedToolSummaryN returns the first n chars of the compacted tool_input.
+// Empty when no input was supplied.
+func boundedToolSummaryN(raw json.RawMessage, n int) string {
 	if len(raw) == 0 {
 		return ""
 	}
@@ -971,8 +1000,8 @@ func boundedToolSummary(raw json.RawMessage) string {
 			compact = buf
 		}
 	}
-	if len(compact) > 200 {
-		return string(compact[:200])
+	if len(compact) > n {
+		return string(compact[:n])
 	}
 	return string(compact)
 }

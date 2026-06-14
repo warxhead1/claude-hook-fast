@@ -233,6 +233,27 @@ func TestBoundedToolSummary(t *testing.T) {
 	}
 }
 
+func TestBoundToolSummary_TargetsDispatchTools(t *testing.T) {
+	long := strings.Repeat("a", 3000)
+	raw := []byte(`{"prompt":"` + long + `"}`)
+	// Dispatch tools get the larger bound; ordinary tools keep 200.
+	for _, tool := range []string{"Agent", "Task", "Workflow"} {
+		if got := len(boundToolSummary(tool, raw)); got != toolSummaryBoundLarge {
+			t.Errorf("%s: len = %d, want %d", tool, got, toolSummaryBoundLarge)
+		}
+	}
+	for _, tool := range []string{"Bash", "Read", "Edit", ""} {
+		if got := len(boundToolSummary(tool, raw)); got != toolSummaryBound {
+			t.Errorf("%s: len = %d, want %d", tool, got, toolSummaryBound)
+		}
+	}
+	// A short input is returned whole regardless of tool.
+	short := []byte(`{"command":"ls"}`)
+	if got := boundToolSummary("Agent", short); len(got) != len(short) {
+		t.Errorf("short input should pass through, got %d want %d", len(got), len(short))
+	}
+}
+
 func TestBaseEnvelope_StampsWorktree(t *testing.T) {
 	root := t.TempDir()
 	wt := filepath.Join(root, "hearth-loom", "main")
