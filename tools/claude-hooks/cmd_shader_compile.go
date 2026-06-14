@@ -84,15 +84,56 @@ func cmdShaderCompileValidator() {
 		fmt.Fprintf(&msg, " (compiled via %s — %s)", targetBase, reason)
 	}
 	fmt.Fprintf(&msg, ":\n\n")
-	if diagOut := strings.TrimSpace(stderr.String()); diagOut != "" {
+	diagOut := strings.TrimSpace(stderr.String())
+	if diagOut != "" {
 		fmt.Fprintln(&msg, diagOut)
 	} else {
 		fmt.Fprintln(&msg, err.Error())
 	}
+
+	// Reflexarc enrichment: turn raw "undeclared identifier"/"cannot find include"
+	// diagnostics into the EXACT deterministic fix (which import/include to add).
+	// Best-effort — never changes pass/fail, only augments the message.
+	if fixes := reflexarcSlangFixes(fp, diagOut); fixes != "" {
+		fmt.Fprintf(&msg, "\n🛰 Reflexarc — deterministic fix:\n%s\n", fixes)
+	}
+
 	fmt.Fprintln(&msg, "\nFix the compile error before continuing.")
 
 	fmt.Fprint(os.Stderr, msg.String())
 	os.Exit(2)
+}
+
+// reflexarcSlangFixes shells out to the reflex-tengine slang resolver, which maps
+// undeclared RES_*/WT_* symbols → the exact `import <leaf_shard>;` and bad #include
+// paths → the correct path. Returns "" on any failure (resolver absent, timeout,
+// no deterministic fix) so this never disrupts the validator.
+func reflexarcSlangFixes(fp, compilerStderr string) string {
+	if compilerStderr == "" {
+		return ""
+	}
+	resolver := os.Getenv("REFLEX_SLANG_RESOLVER")
+	if resolver == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		resolver = filepath.Join(home, ".config", "nervous-bus", "adapters",
+			"reflex-tengine", "sentinels", "slang_edit.py")
+	}
+	if _, err := os.Stat(resolver); err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "python3", resolver, "--resolve", fp)
+	cmd.Stdin = strings.NewReader(compilerStderr)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
 }
 
 // resolveCompileTarget returns the shader file to compile and a human-readable
