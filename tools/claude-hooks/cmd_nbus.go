@@ -198,6 +198,36 @@ func cmdNbusActivity() {
 	}
 
 	publishNbusEnvelope(chanAgentActivity, env, can)
+
+	// AskUserQuestion answered: PostToolUse fires for it (confirmed empirically)
+	// and the result carries the user's selection in tool_response.answers as
+	// {question: chosen_label}. Emit a grounded question.responded.v1 keyed by
+	// the same tool_use_id the ask used, so hearth dismisses the exact in-app
+	// card with the real choice — no activity heuristics, no transcript polling.
+	if in.ToolName == "AskUserQuestion" {
+		var answers []string
+		qaMap := map[string]string{}
+		var m map[string]any
+		if err := json.Unmarshal(in.ToolResponse, &m); err == nil {
+			if a, ok := m["answers"].(map[string]any); ok {
+				for q, v := range a {
+					if s, ok := v.(string); ok && s != "" {
+						answers = append(answers, s)
+						qaMap[q] = s
+					}
+				}
+			}
+		}
+		renv := map[string]any{
+			"correlation_id":      in.ToolUseID,
+			"session_id":          in.SessionID,
+			"answers":             answers,
+			"answers_by_question": qaMap,
+			"answered_by":         "terminal",
+			"ts":                  time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		publishNbusEnvelope(chanSessionQuestionResponded, renv, can)
+	}
 }
 
 // extractToolErrorType returns a short label from a tool_response error payload.
@@ -609,7 +639,9 @@ func runQuiet(name string, args ...string) error {
 }
 
 const (
-	chanPermissionRequested = "bus.hearth.session.permission.requested.v1"
+	chanPermissionRequested      = "bus.hearth.session.permission.requested.v1"
+	chanSessionQuestion          = "bus.hearth.session.question.v1"
+	chanSessionQuestionResponded = "bus.hearth.session.question.responded.v1"
 	chanSessionMessage      = "bus.hearth.session.message.v1"
 	chanSessionError        = "bus.hearth.session.error.v1"
 	chanSessionEnd          = "bus.hearth.session.end.v1"
@@ -633,13 +665,77 @@ func cmdNbusPermissionRequest() {
 	paneID := event.PaneIDQualified()
 	corrID := uuid.New().String()
 
+	now := time.Now().UTC()
+	projShort := filepath.Base(can)
+
+	// AskUserQuestion carries a real question + answer options from the model.
+	// Publish to the dedicated question channel instead of the generic permission
+	// card, so phone/watch can render the real choices.
+	if in.ToolName == "AskUserQuestion" {
+		var questionText string
+		var options []string
+
+		if len(in.ToolInput) > 0 {
+			var m map[string]any
+			if err := json.Unmarshal(in.ToolInput, &m); err == nil {
+				// Primary shape: {"questions": [{"question": "...", "options": [...]}]}
+				if qs, ok := m["questions"].([]any); ok && len(qs) > 0 {
+					if q, ok := qs[0].(map[string]any); ok {
+						questionText, _ = q["question"].(string)
+						if opts, ok := q["options"].([]any); ok {
+							for _, o := range opts {
+								switch v := o.(type) {
+								case string:
+									options = append(options, v)
+								case map[string]any:
+									if label, ok := v["label"].(string); ok && label != "" {
+										options = append(options, label)
+									}
+								}
+							}
+						}
+					}
+				}
+				// Fallback: top-level "question" field
+				if questionText == "" {
+					questionText, _ = m["question"].(string)
+				}
+			}
+		}
+		if questionText == "" {
+			questionText = "AskUserQuestion"
+		}
+
+		// Correlate the ask with its PostToolUse answer via tool_use_id — the
+		// stable id Claude Code reuses across both hook edges (PreToolUse ask /
+		// PostToolUse result). This is what lets the answer event resolve the
+		// exact card. Falls back to the random corrID on older clients.
+		qCorr := in.ToolUseID
+		if qCorr == "" {
+			qCorr = corrID
+		}
+
+		env := map[string]any{
+			"correlation_id": qCorr,
+			"session_id":     in.SessionID,
+			"question":       questionText,
+			"options":        options,
+			"project":        can,
+			"project_short":  projShort,
+			"ts":             now.Format(time.RFC3339Nano),
+		}
+		publishNbusEnvelope(chanSessionQuestion, env, can)
+		hooklog.Writef("nbus-permission-request: published QUESTION corr=%s session=%s pane=%s",
+			qCorr, in.SessionID, paneID)
+		return
+	}
+
+	// All other tools: publish the generic permission/approval card.
 	// Extract exactly what the tool is doing so the watch shows a useful card,
 	// not just "Claude Code wants permission". Each tool type has its own field.
 	toolSummary, promptText := extractToolAction(in.ToolName, in.ToolInput)
 
-	now := time.Now().UTC()
 	expires := now.Add(5 * time.Minute)
-	projShort := filepath.Base(can)
 
 	env := map[string]any{
 		"correlation_id": corrID,
@@ -651,7 +747,15 @@ func cmdNbusPermissionRequest() {
 		"tool_name":      in.ToolName,
 		"tool_summary":   toolSummary,
 		"prompt_text":    promptText,
-		"options":        []string{"Yes", "Yes, and don't ask again for this session", "No"},
+		// Schema bus.hearth.session.permission.requested.v1 requires options as
+		// structured objects {label, is_default, checked} — emitting bare strings
+		// makes redis-mirror dead-letter the event ("'No' is not of type 'object'")
+		// so it never reaches hearth-api and no card is ever shown.
+		"options": []map[string]any{
+			{"label": "Yes", "is_default": true, "checked": false},
+			{"label": "Yes, and don't ask again for this session", "is_default": false, "checked": false},
+			{"label": "No", "is_default": false, "checked": false},
+		},
 		"deep_link":      "session://" + in.SessionID,
 		"ts":             now.Format(time.RFC3339Nano),
 		"expires_at":     expires.Format(time.RFC3339Nano),
