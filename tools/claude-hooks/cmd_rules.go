@@ -122,9 +122,10 @@ type matchCfg struct {
 }
 
 type stateCfg struct {
-	Counter   string `json:"counter"`
-	Scope     string `json:"scope"`     // "session"
-	Increment bool   `json:"increment"` // increment before evaluating when
+	Counter    string `json:"counter"`
+	Scope      string `json:"scope"`       // "session"
+	Increment  bool   `json:"increment"`   // increment before evaluating when
+	TTLSeconds int    `json:"ttl_seconds"` // 0 = no TTL; >0 = reset counter to 0 when its state file is older than this (last matching invocation was > TTL ago)
 }
 
 type whenCfg struct {
@@ -252,6 +253,22 @@ func readCounter(dir, name string) int {
 func writeCounter(dir, name string, n int) {
 	_ = os.MkdirAll(dir, 0o755)
 	_ = os.WriteFile(filepath.Join(dir, name), []byte(strconv.Itoa(n)), 0o644)
+}
+
+// counterStale reports whether the counter's state file has not been touched
+// within ttl. The file's mtime tracks the last matching invocation (each
+// increment rewrites it), so "stale" means "no matching activity in ttl" — used
+// for time-based counter resets that survive across a single session. A missing
+// file is not stale (readCounter already yields 0).
+func counterStale(dir, name string, ttl time.Duration) bool {
+	if ttl <= 0 {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(dir, name))
+	if err != nil {
+		return false
+	}
+	return time.Since(fi.ModTime()) > ttl
 }
 
 // ── built-in condition: cargo_no_rust_edits ───────────────────────────────────
@@ -616,6 +633,16 @@ func cmdRules() {
 
 		counter := 0
 		if rule.State.Counter != "" {
+			// Time-based reset: if the counter's state file hasn't been touched
+			// within ttl_seconds, the last matching invocation was long enough ago
+			// that we zero the counter before evaluating. This lets per-session
+			// guards (e.g. the cold-silo-start limiter) recover after a quiet period
+			// without ending the session — requested 2026-06-19.
+			if rule.State.TTLSeconds > 0 &&
+				counterStale(sd, rule.State.Counter,
+					time.Duration(rule.State.TTLSeconds)*time.Second) {
+				writeCounter(sd, rule.State.Counter, 0)
+			}
 			if rule.State.Increment {
 				counter = readCounter(sd, rule.State.Counter) + 1
 				writeCounter(sd, rule.State.Counter, counter)
