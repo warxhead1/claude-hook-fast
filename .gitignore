@@ -1,7 +1,7 @@
-# Compiled binaries
-claude-hook-fast
-codex-hook
-hearth-loom-hook
+# Compiled binaries (anchored to repo root so they don't match cmd/<name>/ source dirs)
+/claude-hook-fast
+/codex-hook
+/hearth-loom-hook
 tools/claude-hooks/claude-hook-fast
 
 # Go build artifacts
