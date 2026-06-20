@@ -75,6 +75,12 @@ func main() {
 		cmdRules()
 	case "session-init":
 		cmdSessionInit()
+	case "plan-resume":
+		cmdPlanResume()
+	case "brain-register":
+		cmdBrainRegister()
+	case "memory-staleness":
+		cmdMemoryStaleness()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)
