@@ -73,6 +73,8 @@ func main() {
 		cmdFlowTelemetry()
 	case "rules":
 		cmdRules()
+	case "session-init":
+		cmdSessionInit()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)

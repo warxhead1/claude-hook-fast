@@ -13,3 +13,4 @@ tools/claude-hooks/claude-hook-fast
 .DS_Store
 *.swp
 *.swo
+chf.bak
