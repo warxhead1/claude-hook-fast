@@ -32,6 +32,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -267,8 +269,111 @@ func cmdNbusStop() {
 	in, _ := readStdinForHook()
 	emitSessionLifecycleFromInput(in, "turn_end")
 }
-func cmdNbusNotification()  { emitSessionLifecycle("notification") }
-func cmdNbusPreCompact()    { emitSessionLifecycle("compact") }
+func cmdNbusNotification() { emitSessionLifecycle("notification") }
+
+// kbHarvestSpec holds the resolved binary path and argument slice for a kb
+// harvest invocation. An empty Binary means "no harvest" (skip silently).
+type kbHarvestSpec struct {
+	Binary string
+	Args   []string
+}
+
+// resolveKbHarvest returns the spec for harvesting a compaction transcript
+// into the kb knowledge vault. Returns zero spec (empty Binary) when the
+// kb binary cannot be found or TranscriptPath is empty — callers skip
+// silently in that case.
+//
+// Binary resolution order:
+//  1. $HOME/.local/bin/kb
+//  2. kb on PATH
+func resolveKbHarvest(in event.HookInput) kbHarvestSpec {
+	if in.TranscriptPath == "" {
+		return kbHarvestSpec{}
+	}
+
+	// Prefer the canonical install location.
+	home := os.Getenv("HOME")
+	if home != "" {
+		candidate := filepath.Join(home, ".local", "bin", "kb")
+		if _, err := os.Stat(candidate); err == nil {
+			return kbHarvestSpec{
+				Binary: candidate,
+				Args: []string{
+					"harvest",
+					"--transcript", in.TranscriptPath,
+					"--session", in.SessionID,
+					"--stdout",
+					"--max-tokens", "2000",
+				},
+			}
+		}
+	}
+
+	// Fall back to PATH lookup.
+	if bin, err := osexec.LookPath("kb"); err == nil { //nolint:gosec
+		return kbHarvestSpec{
+			Binary: bin,
+			Args: []string{
+				"harvest",
+				"--transcript", in.TranscriptPath,
+				"--session", in.SessionID,
+				"--stdout",
+				"--max-tokens", "2000",
+			},
+		}
+	}
+
+	return kbHarvestSpec{}
+}
+
+// runKbHarvest executes the kb harvest command described by spec, captures
+// its stdout, and writes it to out (the hook's own stdout — injection
+// mechanism). The execution is bounded by an 8-second context timeout.
+// All errors are swallowed per FAF discipline; on failure nothing is
+// written to out to avoid injecting partial garbage.
+func runKbHarvest(spec kbHarvestSpec, out io.Writer) {
+	if spec.Binary == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	cmd := osexec.CommandContext(ctx, spec.Binary, spec.Args...) //nolint:gosec
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = io.Discard
+
+	if err := cmd.Run(); err != nil {
+		hooklog.Writef("nbus-pre-compact: kb harvest error: %v", err)
+		return
+	}
+
+	if buf.Len() == 0 {
+		return
+	}
+	if _, err := io.Copy(out, &buf); err != nil {
+		hooklog.Writef("nbus-pre-compact: kb harvest stdout copy error: %v", err)
+	}
+}
+
+func cmdNbusPreCompact() {
+	// Read stdin exactly once so both the bus emit and the harvest can use it.
+	in, _ := readStdinForHook()
+	emitSessionLifecycleFromInput(in, "compact")
+
+	// Resolve and run kb harvest. The spec is a pure function of in so it
+	// can be tested without spawning the real binary. runKbHarvest writes
+	// the digest to os.Stdout — injected into the post-compact context.
+	spec := resolveKbHarvest(in)
+	if spec.Binary == "" {
+		if in.TranscriptPath != "" {
+			hooklog.Writef("nbus-pre-compact: kb binary not found, skipping harvest")
+		}
+		return
+	}
+	runKbHarvest(spec, os.Stdout)
+}
 
 // emitSessionLifecycle is the agent.session emitter the bash
 // lib/nbus-publish.sh used to do. Single helper for callers that haven't

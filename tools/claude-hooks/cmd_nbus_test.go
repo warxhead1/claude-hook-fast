@@ -475,3 +475,108 @@ func TestCmdNbusActivity_ToolIsError(t *testing.T) {
 		t.Errorf("tool_error_type = %v, want exit_code", env["tool_error_type"])
 	}
 }
+
+// TestResolveKbHarvest_EmptyTranscript verifies that a HookInput with no
+// TranscriptPath returns an empty spec (no harvest invocation).
+func TestResolveKbHarvest_EmptyTranscript(t *testing.T) {
+	in := event.HookInput{
+		SessionID:      "sess-x",
+		TranscriptPath: "",
+	}
+	spec := resolveKbHarvest(in)
+	if spec.Binary != "" {
+		t.Errorf("expected empty Binary for empty TranscriptPath, got %q", spec.Binary)
+	}
+	if len(spec.Args) != 0 {
+		t.Errorf("expected empty Args for empty TranscriptPath, got %v", spec.Args)
+	}
+}
+
+// TestResolveKbHarvest_PopulatedInput verifies that a HookInput with a
+// TranscriptPath and SessionID produces the correct argument slice when
+// the kb binary is found at $HOME/.local/bin/kb.
+func TestResolveKbHarvest_PopulatedInput(t *testing.T) {
+	// Set up a fake HOME with a fake kb executable at .local/bin/kb.
+	fakeHome := t.TempDir()
+	kbDir := filepath.Join(fakeHome, ".local", "bin")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kbBin := filepath.Join(kbDir, "kb")
+	// Write a trivial shell script that exits 0 (content doesn't matter for
+	// resolveKbHarvest — we're testing the path resolution, not execution).
+	if err := os.WriteFile(kbBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", fakeHome)
+
+	in := event.HookInput{
+		SessionID:      "sess-abc",
+		TranscriptPath: "/tmp/some-conv.jsonl",
+	}
+	spec := resolveKbHarvest(in)
+
+	if spec.Binary != kbBin {
+		t.Errorf("Binary = %q, want %q", spec.Binary, kbBin)
+	}
+	wantArgs := []string{
+		"harvest",
+		"--transcript", "/tmp/some-conv.jsonl",
+		"--session", "sess-abc",
+		"--stdout",
+		"--max-tokens", "2000",
+	}
+	if len(spec.Args) != len(wantArgs) {
+		t.Fatalf("Args len = %d, want %d: %v", len(spec.Args), len(wantArgs), spec.Args)
+	}
+	for i, want := range wantArgs {
+		if spec.Args[i] != want {
+			t.Errorf("Args[%d] = %q, want %q", i, spec.Args[i], want)
+		}
+	}
+}
+
+// TestResolveKbHarvest_PrefersDotLocalBin verifies that $HOME/.local/bin/kb
+// is preferred over any kb on PATH when both exist.
+func TestResolveKbHarvest_PrefersDotLocalBin(t *testing.T) {
+	fakeHome := t.TempDir()
+	kbDir := filepath.Join(fakeHome, ".local", "bin")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kbBin := filepath.Join(kbDir, "kb")
+	if err := os.WriteFile(kbBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", fakeHome)
+	// Even if PATH also has a kb somewhere, ~/.local/bin/kb should win.
+	// (We don't need to put a real kb on PATH — the function checks HOME first.)
+
+	in := event.HookInput{
+		SessionID:      "sess-pref",
+		TranscriptPath: "/tmp/conv-pref.jsonl",
+	}
+	spec := resolveKbHarvest(in)
+	if spec.Binary != kbBin {
+		t.Errorf("Binary = %q, want %q (HOME/.local/bin/kb)", spec.Binary, kbBin)
+	}
+}
+
+// TestResolveKbHarvest_MissingBinary verifies that a missing kb binary
+// (not in HOME/.local/bin and not on PATH) yields an empty spec.
+func TestResolveKbHarvest_MissingBinary(t *testing.T) {
+	// Point HOME at an empty temp dir so ~/.local/bin/kb doesn't exist.
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	// Blank PATH so osexec.LookPath("kb") also fails.
+	t.Setenv("PATH", "")
+
+	in := event.HookInput{
+		SessionID:      "sess-missing",
+		TranscriptPath: "/tmp/conv-missing.jsonl",
+	}
+	spec := resolveKbHarvest(in)
+	if spec.Binary != "" {
+		t.Errorf("expected empty Binary when kb not found, got %q", spec.Binary)
+	}
+}
