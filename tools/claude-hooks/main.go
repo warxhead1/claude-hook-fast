@@ -63,6 +63,8 @@ func main() {
 	// Replaces interpreter cold-start cost that compounds under loomie load.
 	case "cleanup-tmp":
 		cmdCleanupTmp()
+	case "dispatch-model-guard":
+		cmdDispatchModelGuard()
 	case "hardcoded-constants-guard":
 		cmdHardcodedConstantsGuard()
 	case "shader-hardcoded-ids-guard":
