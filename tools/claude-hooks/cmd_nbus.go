@@ -42,7 +42,9 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -268,6 +270,100 @@ func cmdNbusSessionStart() {
 func cmdNbusStop() {
 	in, _ := readStdinForHook()
 	emitSessionLifecycleFromInput(in, "turn_end")
+	maybeHarvestOnStop(in)
+}
+
+// harvestCursorPath returns the path to the cursor file tracking the last
+// Stop-triggered kb harvest for a session. Separate directory from
+// steeringCursorPath (~/.hearth-loom/steering-cursor/) — different
+// semantics (wall-clock gate vs a "since" pull cursor) — so the two
+// features can't collide by keying on the same session id.
+func harvestCursorPath(sessionID string) string {
+	home := os.Getenv("HOME")
+	return filepath.Join(home, ".hearth-loom", "harvest-cursor", sessionID)
+}
+
+// harvestStopMinInterval bounds how often a Stop event may trigger a kb
+// harvest for the same session. kb harvest today only fires from
+// cmdNbusPreCompact — during a long uncompacted stretch (observed: a real
+// session ran 5,726 JSONL lines / 3 days with zero compaction) nothing gets
+// harvested until the next compaction, or never if the session ends first.
+// Stop fires on every turn end, so gating it at this interval closes that
+// gap without harvesting on every single turn.
+const harvestStopMinInterval = 15 * time.Minute
+
+// maybeHarvestOnStop fires a detached, best-effort `kb harvest` for the
+// session's transcript when enough wall-clock time has passed since the
+// last Stop-triggered harvest for this session. Detached (Start, not
+// Run/Wait) so this never adds latency to the Stop hook chain
+// (tmux-ready → brain-session-summary.js → nbus-stop → cleanup-tmp) — the
+// harvest child process outlives this hook invocation.
+func maybeHarvestOnStop(in event.HookInput) {
+	if in.SessionID == "" || in.TranscriptPath == "" {
+		return
+	}
+
+	cursorPath := harvestCursorPath(in.SessionID)
+	if data, err := os.ReadFile(cursorPath); err == nil {
+		var lastNano int64
+		if json.Unmarshal(data, &lastNano) == nil && lastNano > 0 {
+			if time.Since(time.Unix(0, lastNano)) < harvestStopMinInterval {
+				return
+			}
+		}
+	}
+
+	spec := resolveKbHarvest(in)
+	if spec.Binary == "" {
+		return
+	}
+	// Stop-triggered harvest is a pure vault side-effect — no --stdout
+	// injection (that's PreCompact's job, where the digest is meant to be
+	// read back into context).
+	spec.Args = stripFlag(spec.Args, "--stdout")
+
+	if !startDetached(spec.Binary, spec.Args) {
+		return
+	}
+
+	// Advance the cursor optimistically; kb harvest is idempotent
+	// (content_hash dedup) so a spurious "already harvested" on the very
+	// next Stop is harmless — worst case we wait one more interval.
+	now := time.Now().UnixNano()
+	_ = os.MkdirAll(filepath.Dir(cursorPath), 0755)
+	if b, err := json.Marshal(now); err == nil {
+		_ = os.WriteFile(cursorPath, b, 0644)
+	}
+}
+
+// stripFlag removes a bare (non-valued) flag from an args slice.
+func stripFlag(args []string, flag string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == flag {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// startDetached launches bin with args as a detached child (new session,
+// via Setsid) and returns immediately without waiting, so the child
+// survives this hook process exiting. Best-effort: any Start() error is
+// swallowed after logging.
+func startDetached(bin string, args []string) bool {
+	cmd := osexec.Command(bin, args...) //nolint:gosec
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Env = append(os.Environ(), "NERVOUS_BUS_LIVE=1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		hooklog.Writef("nbus-stop: kb harvest start error: %v", err)
+		return false
+	}
+	return true
 }
 func cmdNbusNotification() { emitSessionLifecycle("notification") }
 
@@ -330,10 +426,12 @@ func resolveKbHarvest(in event.HookInput) kbHarvestSpec {
 // its stdout, and writes it to out (the hook's own stdout — injection
 // mechanism). The execution is bounded by an 8-second context timeout.
 // All errors are swallowed per FAF discipline; on failure nothing is
-// written to out to avoid injecting partial garbage.
-func runKbHarvest(spec kbHarvestSpec, out io.Writer) {
+// written to out to avoid injecting partial garbage. Returns the captured
+// digest bytes (nil on failure/empty) so callers can also inspect it, e.g.
+// for the auto-landmark decision-phrase scan.
+func runKbHarvest(spec kbHarvestSpec, out io.Writer) []byte {
 	if spec.Binary == "" {
-		return
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -343,17 +441,71 @@ func runKbHarvest(spec kbHarvestSpec, out io.Writer) {
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = io.Discard
+	// kb's bus publisher is gated behind NERVOUS_BUS_LIVE (off by default,
+	// to keep `cargo test` runs quiet) — hook-triggered harvests are real
+	// session activity, not test noise, so opt them in explicitly.
+	cmd.Env = append(os.Environ(), "NERVOUS_BUS_LIVE=1")
 
 	if err := cmd.Run(); err != nil {
 		hooklog.Writef("nbus-pre-compact: kb harvest error: %v", err)
-		return
+		return nil
 	}
 
 	if buf.Len() == 0 {
-		return
+		return nil
 	}
 	if _, err := io.Copy(out, &buf); err != nil {
 		hooklog.Writef("nbus-pre-compact: kb harvest stdout copy error: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// decisionPhraseRe matches sentence-starting decision-shaped language —
+// the same shape a CLAUDE.md hardline convention uses ("we should X",
+// "never Y", "always Z", "decided to Q"). Anchored at line start (harvest
+// digest lines are one ask/outcome/commit per line, see assemble_body in
+// kb's harvest.rs) to avoid matching mid-sentence noise like "...has never
+// been tested".
+var decisionPhraseRe = regexp.MustCompile(`(?im)^(?:[-*>]\s*)?(?:we (?:should|must|will) |never |always |decided to |decision: )([^\n.]{10,200})`)
+
+// maxAutoLandmarksPerCompact bounds the auto-landmark blast radius per
+// PreCompact event — this is a cheap unvetted capture, not a substitute
+// for `kb save-finding`'s human/agent-judged pillar classification.
+const maxAutoLandmarksPerCompact = 3
+
+// autoLandmarkFromDigest scans a kb-harvest digest for decision-shaped
+// sentences and calls `kb landmark` (default confidence 0.3, tagged
+// auto-landmark) for each — the automated half of session-time
+// idea/brainstorm curation. `kb save-finding` stays manual: pillar
+// classification needs judgment a regex can't make. Detached + capped +
+// deduped; every error swallowed (FAF discipline, matches runKbHarvest).
+func autoLandmarkFromDigest(spec kbHarvestSpec, in event.HookInput, digest []byte) {
+	if len(digest) == 0 || spec.Binary == "" {
+		return
+	}
+	matches := decisionPhraseRe.FindAllStringSubmatch(string(digest), -1)
+	if len(matches) == 0 {
+		return
+	}
+
+	can, _ := project.Resolve(in.EffectiveCWD())
+	seen := make(map[string]bool, len(matches))
+	count := 0
+	for _, m := range matches {
+		if count >= maxAutoLandmarksPerCompact {
+			break
+		}
+		title := strings.TrimSpace(m[1])
+		if title == "" || seen[title] {
+			continue
+		}
+		seen[title] = true
+		count++
+
+		args := []string{"landmark", title, "--project", can, "--tags", "auto-landmark,precompact"}
+		if !startDetached(spec.Binary, args) {
+			return
+		}
 	}
 }
 
@@ -364,7 +516,8 @@ func cmdNbusPreCompact() {
 
 	// Resolve and run kb harvest. The spec is a pure function of in so it
 	// can be tested without spawning the real binary. runKbHarvest writes
-	// the digest to os.Stdout — injected into the post-compact context.
+	// the digest to os.Stdout — injected into the post-compact context —
+	// and returns it so the auto-landmark scan can inspect the same text.
 	spec := resolveKbHarvest(in)
 	if spec.Binary == "" {
 		if in.TranscriptPath != "" {
@@ -372,7 +525,8 @@ func cmdNbusPreCompact() {
 		}
 		return
 	}
-	runKbHarvest(spec, os.Stdout)
+	digest := runKbHarvest(spec, os.Stdout)
+	autoLandmarkFromDigest(spec, in, digest)
 }
 
 // emitSessionLifecycle is the agent.session emitter the bash
@@ -776,62 +930,94 @@ func cmdNbusPermissionRequest() {
 	// AskUserQuestion carries a real question + answer options from the model.
 	// Publish to the dedicated question channel instead of the generic permission
 	// card, so phone/watch can render the real choices.
+	//
+	// This handler is called from BOTH PreToolUse (AskUserQuestion matcher) and
+	// PermissionRequest (catch-all). PreToolUse always fires first and provides
+	// tool_use_id. PermissionRequest fires afterward with no tool_use_id. To avoid
+	// triple notifications, skip the PermissionRequest path when tool_use_id is set
+	// (PreToolUse already published).
 	if in.ToolName == "AskUserQuestion" {
-		var questionText string
-		var options []string
+		// Dedup: if we have no tool_use_id, we're the PermissionRequest invocation —
+		// PreToolUse already handled this. Skip.
+		if in.ToolUseID == "" {
+			hooklog.Writef("nbus-permission-request: AskUserQuestion skip (PermissionRequest dup; PreToolUse already published) session=%s", in.SessionID)
+			return
+		}
+
+		type parsedQ struct {
+			text    string
+			options []string
+		}
+		var allQuestions []parsedQ
 
 		if len(in.ToolInput) > 0 {
 			var m map[string]any
 			if err := json.Unmarshal(in.ToolInput, &m); err == nil {
 				// Primary shape: {"questions": [{"question": "...", "options": [...]}]}
 				if qs, ok := m["questions"].([]any); ok && len(qs) > 0 {
-					if q, ok := qs[0].(map[string]any); ok {
-						questionText, _ = q["question"].(string)
-						if opts, ok := q["options"].([]any); ok {
-							for _, o := range opts {
+					for _, qi := range qs {
+						q, ok := qi.(map[string]any)
+						if !ok {
+							continue
+						}
+						text, _ := q["question"].(string)
+						var opts []string
+						if rawOpts, ok := q["options"].([]any); ok {
+							for _, o := range rawOpts {
 								switch v := o.(type) {
 								case string:
-									options = append(options, v)
+									opts = append(opts, v)
 								case map[string]any:
 									if label, ok := v["label"].(string); ok && label != "" {
-										options = append(options, label)
+										opts = append(opts, label)
 									}
 								}
 							}
 						}
+						if text != "" {
+							allQuestions = append(allQuestions, parsedQ{text: text, options: opts})
+						}
 					}
 				}
 				// Fallback: top-level "question" field
-				if questionText == "" {
-					questionText, _ = m["question"].(string)
+				if len(allQuestions) == 0 {
+					if text, _ := m["question"].(string); text != "" {
+						allQuestions = append(allQuestions, parsedQ{text: text})
+					}
 				}
 			}
 		}
-		if questionText == "" {
-			questionText = "AskUserQuestion"
+		if len(allQuestions) == 0 {
+			allQuestions = append(allQuestions, parsedQ{text: "AskUserQuestion"})
 		}
 
-		// Correlate the ask with its PostToolUse answer via tool_use_id — the
-		// stable id Claude Code reuses across both hook edges (PreToolUse ask /
-		// PostToolUse result). This is what lets the answer event resolve the
-		// exact card. Falls back to the random corrID on older clients.
+		// Correlate via tool_use_id so PostToolUse can resolve the exact card.
 		qCorr := in.ToolUseID
-		if qCorr == "" {
-			qCorr = corrID
+
+		// Build the questions_all array for multi-phase survey support.
+		// Android renders a SurveyCard when questions_all has >1 entry, so all
+		// phases are visible upfront instead of being lost when Q1 is answered.
+		questionsAll := make([]map[string]any, 0, len(allQuestions))
+		for _, q := range allQuestions {
+			questionsAll = append(questionsAll, map[string]any{
+				"question": q.text,
+				"options":  q.options,
+			})
 		}
 
 		env := map[string]any{
 			"correlation_id": qCorr,
 			"session_id":     in.SessionID,
-			"question":       questionText,
-			"options":        options,
+			"question":       allQuestions[0].text,
+			"options":        allQuestions[0].options,
+			"questions_all":  questionsAll,
 			"project":        can,
 			"project_short":  projShort,
 			"ts":             now.Format(time.RFC3339Nano),
 		}
 		publishNbusEnvelope(chanSessionQuestion, env, can)
-		hooklog.Writef("nbus-permission-request: published QUESTION corr=%s session=%s pane=%s",
-			qCorr, in.SessionID, paneID)
+		hooklog.Writef("nbus-permission-request: published QUESTION corr=%s session=%s pane=%s phases=%d",
+			qCorr, in.SessionID, paneID, len(allQuestions))
 		return
 	}
 
