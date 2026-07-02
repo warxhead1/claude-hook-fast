@@ -65,8 +65,14 @@
 //
 // Built-in condition keywords (match.builtin):
 //
-//	"cargo_no_rust_edits" — fires when cwd is inside a tengine worktree AND
-//	                         git status shows no .rs/.c/.h/.toml edits.
+//	"cargo_no_rust_edits"        — fires when cwd is inside a tengine worktree
+//	                                AND git status shows no .rs/.c/.h/.toml edits.
+//	"agent_no_isolation"         — fires when cwd is a shared (non-worktree)
+//	                                git checkout AND the Agent/Task call's
+//	                                tool_input has no non-blank isolation field.
+//	"workflow_partial_isolation" — fires when a Workflow script's agent() call
+//	                                count exceeds its isolation: 'worktree'
+//	                                spec count, in a shared git checkout.
 //
 // State directory: ~/.claude/hooks/state/<project-slug>/<session_id>/
 // Config cache:    stat mtime — reparsed only on change.
@@ -384,6 +390,88 @@ var (
 	reGitWriteCmd     = regexp.MustCompile(`\b(commit|apply|checkout|restore)\b`)
 )
 
+// ── built-in condition: agent_no_isolation ───────────────────────────────────
+
+// isGitRepo walks up from dir looking for a .git entry (directory or file,
+// so it matches both regular repos and worktree checkouts).
+func isGitRepo(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	d := filepath.Clean(dir)
+	for i := 0; i < 30; i++ {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
+	return false
+}
+
+// alreadyIsolatedCWD reports whether cwd is already inside a Claude-managed
+// per-agent worktree checkout, in which case a dispatch made FROM there
+// doesn't need its own nested isolation — it's already sandboxed by
+// whatever created that worktree. Deliberately does NOT treat a generic
+// <project>/<branch> bare-repo layout (e.g. hearth-loom/main) as isolated —
+// that reflects the operator's own branch organization, not per-dispatch
+// agent isolation.
+func alreadyIsolatedCWD(cwd string) bool {
+	sep := string(filepath.Separator)
+	return strings.Contains(cwd, sep+".claude"+sep+"worktrees"+sep) ||
+		strings.Contains(cwd, sep+".worktrees"+sep)
+}
+
+// checkAgentNoIsolation returns true (condition holds → should block) when
+// cwd sits in a shared, non-isolated git checkout and toolInput (the
+// Agent/Task call's parameters) has no non-blank isolation field.
+//
+// Real incident, 2026-07-02: an Agent dispatched without isolation into
+// hearth's shared main checkout hit an "uncommitted changes" obstacle and
+// ran `git stash`, silently hiding 450+ lines of unrelated WIP directly on
+// main. This builtin exists to catch that class of dispatch before it runs.
+func checkAgentNoIsolation(cwd string, toolInput json.RawMessage) bool {
+	if !isGitRepo(cwd) || alreadyIsolatedCWD(cwd) {
+		return false
+	}
+	if len(toolInput) == 0 {
+		return false // fail-open: no input to inspect
+	}
+	var ti map[string]any
+	if err := json.Unmarshal(toolInput, &ti); err != nil {
+		return false // fail-open: malformed input
+	}
+	isolation, _ := ti["isolation"].(string)
+	return strings.TrimSpace(isolation) == ""
+}
+
+// checkWorkflowPartialIsolation returns true (should block) when a Workflow
+// script's tool_input has fewer isolation: 'worktree' specs than agent()
+// calls, while cwd sits in a shared, non-isolated git checkout. Mirrors
+// dispatch-model-guard's guardWorkflowModels coverage-counting approach.
+func checkWorkflowPartialIsolation(cwd string, toolInput json.RawMessage) bool {
+	if !isGitRepo(cwd) || alreadyIsolatedCWD(cwd) {
+		return false
+	}
+	if len(toolInput) == 0 {
+		return false
+	}
+	var ti map[string]any
+	if err := json.Unmarshal(toolInput, &ti); err != nil {
+		return false
+	}
+	script, _ := ti["script"].(string)
+	if script == "" {
+		return false
+	}
+	agentCount := strings.Count(script, "agent(")
+	isolationCount := strings.Count(script, `isolation: "worktree"`) + strings.Count(script, `isolation: 'worktree'`)
+	return agentCount > 0 && isolationCount < agentCount
+}
+
 // ── pipeline output ───────────────────────────────────────────────────────────
 
 func expandOutputPath(template, projectDir string) string {
@@ -626,6 +714,12 @@ func cmdRules() {
 			continue
 		}
 		if rule.Match.Builtin == "bash_write_guard" && !checkBashWriteGuard(cmd, in.CWD, projectDir) {
+			continue
+		}
+		if rule.Match.Builtin == "agent_no_isolation" && !checkAgentNoIsolation(in.CWD, in.ToolInput) {
+			continue
+		}
+		if rule.Match.Builtin == "workflow_partial_isolation" && !checkWorkflowPartialIsolation(in.CWD, in.ToolInput) {
 			continue
 		}
 
