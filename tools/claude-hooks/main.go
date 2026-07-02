@@ -83,6 +83,8 @@ func main() {
 		cmdBrainRegister()
 	case "memory-staleness":
 		cmdMemoryStaleness()
+	case "kb-prime-siblings":
+		cmdKbPrimeSiblings()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)
