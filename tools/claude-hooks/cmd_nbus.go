@@ -263,6 +263,29 @@ func cmdNbusSessionStart() {
 		path := filepath.Join(os.Getenv("HOME"), ".hearth-loom", "active-session-id")
 		_ = os.WriteFile(path, []byte(in.SessionID), 0644)
 		hooklog.Writef("nbus-session-start: wrote active-session-id=%s", in.SessionID)
+
+		// Write the real context file so pane_to_jsonl_index() can find this
+		// session even when running in headless/print mode (-p flag), where
+		// the statusLine hook never fires and the pending-* file never gets
+		// upgraded to a real context file.
+		if tmuxPane := os.Getenv("TMUX_PANE"); tmuxPane != "" {
+			xdg := os.Getenv("XDG_RUNTIME_DIR")
+			if xdg == "" {
+				xdg = fmt.Sprintf("/run/user/%d", os.Getuid())
+			}
+			ctxDir := filepath.Join(xdg, "hearth", "context")
+			_ = os.MkdirAll(ctxDir, 0755)
+			ctxPayload, _ := json.Marshal(map[string]any{
+				"currentContext": 0,
+				"tmux_pane":      tmuxPane,
+				"zellij_pane_id": nil,
+				"pid":            os.Getpid(),
+			})
+			ctxPath := filepath.Join(ctxDir, "claude-context-"+in.SessionID+".json")
+			if err := os.WriteFile(ctxPath, ctxPayload, 0644); err == nil {
+				hooklog.Writef("nbus-session-start: wrote context file for %s pane=%s", in.SessionID, tmuxPane)
+			}
+		}
 	}
 	emitSessionLifecycleFromInput(in, "started")
 }
