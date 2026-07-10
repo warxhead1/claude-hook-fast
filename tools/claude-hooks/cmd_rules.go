@@ -132,6 +132,7 @@ type stateCfg struct {
 	Scope      string `json:"scope"`       // "session"
 	Increment  bool   `json:"increment"`   // increment before evaluating when
 	TTLSeconds int    `json:"ttl_seconds"` // 0 = no TTL; >0 = reset counter to 0 when its state file is older than this (last matching invocation was > TTL ago)
+	Window     bool   `json:"window"`      // sliding window: state file = one unix-epoch line per ALLOWED invocation, entries age out after ttl_seconds individually; blocked attempts never consume or extend the window (requires ttl_seconds > 0)
 }
 
 type whenCfg struct {
@@ -275,6 +276,76 @@ func counterStale(dir, name string, ttl time.Duration) bool {
 		return false
 	}
 	return time.Since(fi.ModTime()) > ttl
+}
+
+// ── sliding-window counters ───────────────────────────────────────────────────
+//
+// A window counter ("state": {"window": true}) stores one unix-epoch line per
+// ALLOWED matching invocation instead of a bare count, so "N in the last T
+// minutes" is literally true: entries age out individually, and a blocked
+// attempt neither consumes a slot nor extends the window. The legacy bare
+// counter did both — every blocked retry rewrote the file, refreshing the
+// mtime that the TTL reset keyed on, so a lockout perpetuated itself under
+// retries (2026-07-09 multi-agent wave lockout).
+//
+// Legacy bare-int content parses as a single tiny "epoch" that prunes out
+// immediately — a deliberate one-time amnesty at upgrade (an old count carries
+// no timestamps to age out).
+//
+// Concurrency: read-prune-write is not atomic across concurrent hook
+// invocations (neither was the legacy counter); worst case is one lost or
+// double-counted entry that ages out within ttl_seconds.
+
+func readWindow(dir, name string) []int64 {
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return nil
+	}
+	var out []int64
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(line, 10, 64)
+		if err != nil {
+			return nil // unparsable → legacy/corrupt → empty window
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func pruneWindow(entries []int64, ttl time.Duration, now time.Time) []int64 {
+	if ttl <= 0 {
+		return nil // a window without a TTL is meaningless — fail open
+	}
+	cutoff := now.Add(-ttl).Unix()
+	var out []int64 // fresh slice — never alias/mutate the caller's input
+	for _, e := range entries {
+		if e > cutoff {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func writeWindow(dir, name string, entries []int64) {
+	_ = os.MkdirAll(dir, 0o755)
+	var b strings.Builder
+	for _, e := range entries {
+		fmt.Fprintf(&b, "%d\n", e)
+	}
+	_ = os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o644)
+}
+
+// resetRuleCounter zeroes a rule's counter in whichever format it uses.
+func resetRuleCounter(sd string, rule ruleCfg) {
+	if rule.State.Window {
+		writeWindow(sd, rule.State.Counter, nil)
+	} else {
+		writeCounter(sd, rule.State.Counter, 0)
+	}
 }
 
 // ── built-in condition: cargo_no_rust_edits ───────────────────────────────────
@@ -692,6 +763,13 @@ func cmdRules() {
 	// an invocation detector or inflate its counter (false lockout, 2026-06-12).
 	matchCmd := stripQuotedSpans(cmd)
 
+	// Sliding-window counter bookkeeping (see the window branch below): staged
+	// appends are flushed only if no rule blocks this invocation.
+	now := time.Now()
+	windowEntries := map[string][]int64{}
+	windowStaged := map[string]bool{}
+	windowTTLs := map[string]time.Duration{}
+
 	for i, rule := range cfg.Rules {
 		// ── match phase ────────────────────────────────────────────────────
 
@@ -726,12 +804,32 @@ func cmdRules() {
 		// ── state / counter ────────────────────────────────────────────────
 
 		counter := 0
-		if rule.State.Counter != "" {
+		switch {
+		case rule.State.Counter != "" && rule.State.Window:
+			// Sliding-window counter (see helpers above): prune aged entries,
+			// STAGE the current invocation, and persist only if the whole
+			// invocation is allowed (flush before the final exit). A blocked
+			// attempt must neither consume a slot nor extend the window.
+			ttl := time.Duration(rule.State.TTLSeconds) * time.Second
+			entries := pruneWindow(readWindow(sd, rule.State.Counter), ttl, now)
+			windowEntries[rule.State.Counter] = entries
+			windowTTLs[rule.State.Counter] = ttl
+			if rule.State.Increment {
+				windowStaged[rule.State.Counter] = true
+			}
+			counter = len(entries)
+			if windowStaged[rule.State.Counter] {
+				counter++ // count the staged current attempt, like the legacy pre-increment
+			}
+		case rule.State.Counter != "":
 			// Time-based reset: if the counter's state file hasn't been touched
 			// within ttl_seconds, the last matching invocation was long enough ago
 			// that we zero the counter before evaluating. This lets per-session
-			// guards (e.g. the cold-silo-start limiter) recover after a quiet period
-			// without ending the session — requested 2026-06-19.
+			// guards recover after a quiet period without ending the session —
+			// requested 2026-06-19. NB: every matching invocation (including ones
+			// a later rule blocks) rewrites the file and so restarts this clock;
+			// rate limiters should prefer "window": true, which has true
+			// sliding-window semantics (2026-07-09 lockout).
 			if rule.State.TTLSeconds > 0 &&
 				counterStale(sd, rule.State.Counter,
 					time.Duration(rule.State.TTLSeconds)*time.Second) {
@@ -759,10 +857,21 @@ func cmdRules() {
 		switch rule.Action.Type {
 		case "block":
 			if rule.When.FireOnce && rule.State.Counter != "" {
-				writeCounter(sd, rule.State.Counter, 0)
+				resetRuleCounter(sd, rule)
 			}
-			fmt.Fprint(os.Stderr, rule.Action.Message)
-			if !strings.HasSuffix(rule.Action.Message, "\n") {
+			msg := rule.Action.Message
+			// A window rule can say exactly when the next slot frees — the old
+			// "resets after a quiet period" prose was unkeepable because blocked
+			// attempts refreshed the reset clock (2026-07-09 wave lockout).
+			if rule.State.Window {
+				if entries := windowEntries[rule.State.Counter]; len(entries) > 0 {
+					freeAt := time.Unix(entries[0], 0).Add(windowTTLs[rule.State.Counter])
+					msg += fmt.Sprintf("\n(window: %d counted; oldest ages out in %s at %s; blocked attempts do NOT extend the window)",
+						len(entries), time.Until(freeAt).Round(time.Second), freeAt.Format("15:04:05"))
+				}
+			}
+			fmt.Fprint(os.Stderr, msg)
+			if !strings.HasSuffix(msg, "\n") {
 				fmt.Fprintln(os.Stderr)
 			}
 			os.Exit(2)
@@ -774,7 +883,7 @@ func cmdRules() {
 			// rule can make the agent AWARE without hard-stopping a justified action.
 			// addFeedbackMessage lives in cmd_tengine_guards.go (same package).
 			if rule.When.FireOnce && rule.State.Counter != "" {
-				writeCounter(sd, rule.State.Counter, 0)
+				resetRuleCounter(sd, rule)
 			}
 			addFeedbackMessage(in.SessionID, "rules:"+rule.ID, rule.Action.Message, "warning")
 			// non-blocking: continue evaluating rules
@@ -794,6 +903,14 @@ func cmdRules() {
 				writeCounter(sd, cname, 0)
 			}
 			// non-blocking: continue evaluating rules
+		}
+	}
+
+	// Persist staged sliding-window entries — reached only when no rule blocked
+	// this invocation, so blocked attempts never consume or extend a window.
+	for name, staged := range windowStaged {
+		if staged {
+			writeWindow(sd, name, append(windowEntries[name], now.Unix()))
 		}
 	}
 
