@@ -2,10 +2,17 @@
 //
 // Subcommand: claude-hook-fast rules
 //
-// Reads <project>/.claude/hook-rules.json (discovered by walking up from the
-// hook payload's cwd), evaluates all matching rules, and either blocks
-// (exit 2) or passes through (exit 0). One Go process per tool call;
-// everything else is config.
+// Evaluates TWO config layers per invocation (since 2026-07-11):
+//
+//  1. user-global ~/.claude/hook-rules.json — applies from EVERY cwd, so
+//     cross-repo invariants (dispatch isolation, post-compaction freeze,
+//     whole-tree git ops) cannot be evaded by dispatching from a project
+//     that never opted in;
+//  2. <project>/.claude/hook-rules.json (discovered by walking up from the
+//     hook payload's cwd) — project-specific rules layered on top.
+//
+// All matching rules across both layers either block (exit 2) or pass
+// through (exit 0). One Go process per tool call; everything else is config.
 //
 // Config schema (hook-rules.json version 1):
 //
@@ -73,6 +80,10 @@
 //	"workflow_partial_isolation" — fires when a Workflow script's agent() call
 //	                                count exceeds its isolation: 'worktree'
 //	                                spec count, in a shared git checkout.
+//	"duplicate_binding_spec"     — fires when a Write/Edit puts "BINDING" into
+//	                                docs/design/<X>.md while a sibling spec
+//	                                sharing X's feature prefix already claims
+//	                                BINDING and is not marked SUPERSEDED.
 //
 // State directory: ~/.claude/hooks/state/<project-slug>/<session_id>/
 // Config cache:    stat mtime — reparsed only on change.
@@ -159,7 +170,15 @@ type configCache struct {
 	cwdRegs map[int]*regexp.Regexp
 }
 
-var globalConfigCache = &configCache{}
+// configCaches holds one cache per config path — the engine can evaluate a
+// user-global layer (~/.claude/hook-rules.json) plus a project layer in the
+// same invocation, and each keeps its own mtime-keyed parse cache.
+var configCaches sync.Map // path string -> *configCache
+
+func loadRulesConfig(path string) (*rulesConfig, map[int]*regexp.Regexp, map[int]*regexp.Regexp, error) {
+	v, _ := configCaches.LoadOrStore(path, &configCache{})
+	return v.(*configCache).load(path)
+}
 
 func (c *configCache) load(path string) (*rulesConfig, map[int]*regexp.Regexp, map[int]*regexp.Regexp, error) {
 	c.mu.Lock()
@@ -515,8 +534,33 @@ func checkAgentNoIsolation(cwd string, toolInput json.RawMessage) bool {
 	if err := json.Unmarshal(toolInput, &ti); err != nil {
 		return false // fail-open: malformed input
 	}
+	if st, _ := ti["subagent_type"].(string); readOnlyAgentTypes[strings.TrimSpace(st)] {
+		return false // read-only agent type — cannot clobber a shared checkout
+	}
 	isolation, _ := ti["isolation"].(string)
 	return strings.TrimSpace(isolation) == ""
+}
+
+// readOnlyAgentTypes are subagent types whose tool sets contain no
+// Write/Edit/NotebookEdit tools, so dispatching them into a shared checkout
+// cannot clobber concurrent uncommitted work. Deliberately narrow: types with
+// "All tools" or Bash access (general-purpose, sonnet-worker, haiku-grunt,
+// claude-code-guide, …) stay guarded — Bash can write.
+var readOnlyAgentTypes = map[string]bool{
+	"Explore": true,
+	"Plan":    true,
+}
+
+// knownBuiltins lists every builtin this binary implements. A rule naming any
+// other builtin is skipped entirely (fail-open) instead of matching
+// unconditionally — configs may be written for newer binaries than the one
+// installed.
+var knownBuiltins = map[string]bool{
+	"cargo_no_rust_edits":        true,
+	"bash_write_guard":           true,
+	"agent_no_isolation":         true,
+	"workflow_partial_isolation": true,
+	"duplicate_binding_spec":     true,
 }
 
 // checkWorkflowPartialIsolation returns true (should block) when a Workflow
@@ -541,6 +585,95 @@ func checkWorkflowPartialIsolation(cwd string, toolInput json.RawMessage) bool {
 	agentCount := strings.Count(script, "agent(")
 	isolationCount := strings.Count(script, `isolation: "worktree"`) + strings.Count(script, `isolation: 'worktree'`)
 	return agentCount > 0 && isolationCount < agentCount
+}
+
+// ── built-in condition: duplicate_binding_spec ───────────────────────────────
+
+// checkDuplicateBindingSpec returns true (should block) when a Write/Edit
+// puts the word BINDING into a docs/design/*.md file while a sibling spec
+// sharing the same feature prefix (first two hyphen tokens of the filename,
+// e.g. HERMES-H3-*) already claims BINDING and is not marked SUPERSEDED.
+//
+// Real incident, 2026-07-11: two docs both headed "BINDING build spec"
+// coexisted for one feature; a post-compaction session picked up the second
+// doc, concluded the work was unbuilt, and dispatched a duplicate agent wave
+// into territory the first wave was actively editing. Exactly one live
+// BINDING spec per feature prefix is the invariant this enforces.
+func checkDuplicateBindingSpec(toolInput json.RawMessage) bool {
+	if len(toolInput) == 0 {
+		return false // fail-open
+	}
+	var ti struct {
+		FilePath  string `json:"file_path"`
+		Content   string `json:"content"`
+		NewString string `json:"new_string"`
+	}
+	if err := json.Unmarshal(toolInput, &ti); err != nil {
+		return false // fail-open
+	}
+	sep := string(filepath.Separator)
+	if ti.FilePath == "" || !strings.HasSuffix(ti.FilePath, ".md") ||
+		!strings.Contains(ti.FilePath, sep+"docs"+sep+"design"+sep) {
+		return false
+	}
+	body := ti.Content
+	if body == "" {
+		body = ti.NewString
+	}
+	if !strings.Contains(body, "BINDING") {
+		return false
+	}
+	prefix := bindingSpecPrefix(filepath.Base(ti.FilePath))
+	if prefix == "" {
+		return false
+	}
+	dir := filepath.Dir(ti.FilePath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false // fail-open
+	}
+	checked := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || name == filepath.Base(ti.FilePath) ||
+			!strings.HasSuffix(name, ".md") || !strings.HasPrefix(name, prefix+"-") {
+			continue
+		}
+		if checked++; checked > 50 {
+			return false // absurd sibling count — fail open rather than stall the hook
+		}
+		data, err := readFileBounded(filepath.Join(dir, name), 256<<10)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(data, "BINDING") && !strings.Contains(data, "SUPERSEDED") {
+			return true
+		}
+	}
+	return false
+}
+
+// bindingSpecPrefix derives the shared feature prefix from a spec filename:
+// the first two hyphen-separated tokens ("HERMES-H3-INVESTIGATE-DECIDE.md" →
+// "HERMES-H3"). Filenames with fewer than three tokens have no inferable
+// shared prefix and are never treated as duplicates.
+func bindingSpecPrefix(base string) string {
+	name := strings.TrimSuffix(base, ".md")
+	parts := strings.SplitN(name, "-", 3)
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[0] + "-" + parts[1]
+}
+
+func readFileBounded(path string, limit int64) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, limit))
+	return string(data), err
 }
 
 // ── pipeline output ───────────────────────────────────────────────────────────
@@ -718,35 +851,11 @@ func cmdRules() {
 		in.SessionID = "unknown"
 	}
 
-	// CLAUDE_HOOK_RULES_PATH allows the caller to pin a config path directly,
-	// skipping cwd-based discovery. Used by the conformance test and CI.
-	configPath := os.Getenv("CLAUDE_HOOK_RULES_PATH")
-	if configPath == "" {
-		startDir := in.CWD
-		if startDir == "" {
-			if wd, err := os.Getwd(); err == nil {
-				startDir = wd
-			}
-		}
-		configPath = findRulesConfig(startDir)
-	}
-	if configPath == "" {
+	configPaths := rulesConfigPaths(in.CWD)
+	if len(configPaths) == 0 {
 		os.Exit(0)
 	}
-	// projectDir = the directory that contains .claude/
-	projectDir := filepath.Dir(filepath.Dir(configPath))
 
-	cfg, cmdRegs, cwdRegs, err := globalConfigCache.load(configPath)
-	if err != nil {
-		os.Exit(0) // malformed config → pass-through
-	}
-
-	pipelines := make(map[string]pipelineCfg, len(cfg.Pipelines))
-	for _, p := range cfg.Pipelines {
-		pipelines[p.ID] = p
-	}
-
-	sd := stateDir(projectDir, in.SessionID)
 	cmd := in.command()
 
 	// Bypass hatch: every block message advertises TENGINE_FLOW_GUARD_OFF=1 as
@@ -763,9 +872,87 @@ func cmdRules() {
 	// an invocation detector or inflate its counter (false lockout, 2026-06-12).
 	matchCmd := stripQuotedSpans(cmd)
 
+	now := time.Now()
+
+	// Evaluate every config layer in order (user-global first, then project).
+	// A block inside any layer exits 2 immediately, which also discards all
+	// staged window appends — blocked attempts never consume or extend a window.
+	var flushes []windowFlush
+	for _, p := range configPaths {
+		flushes = append(flushes, evalRulesConfig(p, &in, cmd, matchCmd, now)...)
+	}
+	for _, fl := range flushes {
+		writeWindow(fl.sd, fl.name, append(fl.entries, now.Unix()))
+	}
+	os.Exit(0)
+}
+
+// rulesConfigPaths resolves which config layers apply to this invocation:
+//   - CLAUDE_HOOK_RULES_PATH pins exactly one config (conformance test / CI),
+//     no layering.
+//   - Otherwise: the user-global ~/.claude/hook-rules.json (if present)
+//     PLUS the nearest project .claude/hook-rules.json found walking up from
+//     cwd. Before 2026-07-11 a project config SHADOWED the global one — a
+//     dispatch made from a config-less project cwd into another repo evaded
+//     every isolation rule that repo had configured. Global rules now apply
+//     from every cwd; project rules layer on top.
+func rulesConfigPaths(cwd string) []string {
+	if pinned := os.Getenv("CLAUDE_HOOK_RULES_PATH"); pinned != "" {
+		return []string{pinned}
+	}
+	startDir := cwd
+	if startDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			startDir = wd
+		}
+	}
+	project := findRulesConfig(startDir)
+	global := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		cand := filepath.Join(home, ".claude", "hook-rules.json")
+		if _, err := os.Stat(cand); err == nil {
+			global = cand
+		}
+	}
+	var out []string
+	if global != "" {
+		out = append(out, global)
+	}
+	if project != "" && project != global {
+		out = append(out, project)
+	}
+	return out
+}
+
+// windowFlush is a staged sliding-window append, persisted only when the
+// whole invocation (across all config layers) is allowed.
+type windowFlush struct {
+	sd      string
+	name    string
+	entries []int64
+}
+
+// evalRulesConfig evaluates one config file's rules against the payload.
+// Blocking rules exit(2) inline; non-blocking outcomes accumulate. Returns
+// the staged window appends for the caller to flush if nothing blocked.
+func evalRulesConfig(configPath string, in *ruleHookPayload, cmd, matchCmd string, now time.Time) []windowFlush {
+	// projectDir = the directory that contains .claude/
+	projectDir := filepath.Dir(filepath.Dir(configPath))
+
+	cfg, cmdRegs, cwdRegs, err := loadRulesConfig(configPath)
+	if err != nil {
+		return nil // malformed config → pass-through
+	}
+
+	pipelines := make(map[string]pipelineCfg, len(cfg.Pipelines))
+	for _, p := range cfg.Pipelines {
+		pipelines[p.ID] = p
+	}
+
+	sd := stateDir(projectDir, in.SessionID)
+
 	// Sliding-window counter bookkeeping (see the window branch below): staged
 	// appends are flushed only if no rule blocks this invocation.
-	now := time.Now()
 	windowEntries := map[string][]int64{}
 	windowStaged := map[string]bool{}
 	windowTTLs := map[string]time.Duration{}
@@ -798,6 +985,16 @@ func cmdRules() {
 			continue
 		}
 		if rule.Match.Builtin == "workflow_partial_isolation" && !checkWorkflowPartialIsolation(in.CWD, in.ToolInput) {
+			continue
+		}
+		if rule.Match.Builtin == "duplicate_binding_spec" && !checkDuplicateBindingSpec(in.ToolInput) {
+			continue
+		}
+		// Unknown builtin → the rule can never legitimately match. Without this,
+		// a config written for a NEWER binary makes the rule fire UNCONDITIONALLY
+		// on every matching tool call (live incident 2026-07-11: a new global
+		// config blocked every Edit until the binary caught up). Fail open.
+		if b := rule.Match.Builtin; b != "" && !knownBuiltins[b] {
 			continue
 		}
 
@@ -890,7 +1087,7 @@ func cmdRules() {
 
 		case "log", "emit":
 			if pl, ok := pipelines[rule.Action.Pipeline]; ok {
-				appendToPipeline(pl, &in, projectDir)
+				appendToPipeline(pl, in, projectDir)
 			}
 			// non-blocking: continue evaluating rules
 
@@ -906,13 +1103,14 @@ func cmdRules() {
 		}
 	}
 
-	// Persist staged sliding-window entries — reached only when no rule blocked
-	// this invocation, so blocked attempts never consume or extend a window.
+	// Stage sliding-window entries for the caller — flushed only when no rule
+	// in ANY config layer blocked, so blocked attempts never consume or extend
+	// a window.
+	var flushes []windowFlush
 	for name, staged := range windowStaged {
 		if staged {
-			writeWindow(sd, name, append(windowEntries[name], now.Unix()))
+			flushes = append(flushes, windowFlush{sd: sd, name: name, entries: windowEntries[name]})
 		}
 	}
-
-	os.Exit(0)
+	return flushes
 }

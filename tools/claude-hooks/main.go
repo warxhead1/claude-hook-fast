@@ -65,6 +65,8 @@ func main() {
 		cmdCleanupTmp()
 	case "dispatch-model-guard":
 		cmdDispatchModelGuard()
+	case "compact-freeze-arm":
+		cmdCompactFreezeArm()
 	case "hardcoded-constants-guard":
 		cmdHardcodedConstantsGuard()
 	case "shader-hardcoded-ids-guard":
