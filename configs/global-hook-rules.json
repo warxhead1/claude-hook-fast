@@ -1,0 +1,174 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "agent-dispatch-no-isolation",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Agent",
+        "builtin": "agent_no_isolation"
+      },
+      "state": {},
+      "when": {},
+      "action": {
+        "type": "block",
+        "message": "DISPATCH BLOCKED \u2014 Agent sent into a shared, non-isolated git checkout with no isolation: 'worktree'. An unisolated agent edits the SAME checkout every concurrent agent and session use, and can reach for whole-tree git ops when it hits an obstacle (2026-07-02: 450+ lines stashed onto main; 2026-07-11: an uncommitted implementation of crates/hearth-hermes overwritten by a second writer). Fix ONE of: (a) add isolation: 'worktree' \u2014 the default for anything that writes; (b) use a read-only agent type (Explore/Plan pass automatically); (c) if this is deploy/integration work that must touch the live checkout (service restart, live migration, dist build), do it INLINE in this session instead of dispatching \u2014 one writer per live checkout, and that writer is you."
+      }
+    },
+    {
+      "id": "task-dispatch-no-isolation",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Task",
+        "builtin": "agent_no_isolation"
+      },
+      "state": {},
+      "when": {},
+      "action": {
+        "type": "block",
+        "message": "DISPATCH BLOCKED \u2014 Task sent into a shared, non-isolated git checkout with no isolation: 'worktree'. Same risk class as an unisolated Agent dispatch (2026-07-02 stash incident; 2026-07-11 hearth-hermes overwrite). Add isolation: 'worktree', use a read-only agent type (Explore/Plan pass automatically), or run live-checkout deploy steps inline in this session."
+      }
+    },
+    {
+      "id": "workflow-partial-isolation",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Workflow",
+        "builtin": "workflow_partial_isolation"
+      },
+      "state": {},
+      "when": {},
+      "action": {
+        "type": "warn",
+        "message": "Workflow script has agent() calls without matching isolation: 'worktree' specs, in a shared git checkout. Advisory, not a block \u2014 read-only research/review fleets legitimately skip isolation (worktree setup is expensive and pointless for pure reads). Add isolation: 'worktree' to every agent() call that WRITES files; leave pure readers alone."
+      }
+    },
+    {
+      "id": "compact-freeze-agent",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Agent"
+      },
+      "state": {
+        "counter": "compact_freeze",
+        "scope": "session"
+      },
+      "when": {
+        "counter_gte": 1,
+        "fire_once": true
+      },
+      "action": {
+        "type": "block",
+        "message": "POST-COMPACTION DISPATCH FREEZE (one-shot \u2014 this block consumes itself; your next dispatch will pass). Context was just compacted: the summary is authoritative about intent but LOSSY about in-flight state. Before re-dispatching, verify against the world, not the summary: (1) check the live agent roster / TaskList \u2014 are agents ALREADY working the territories you're about to assign? (2) run git status in every repo you're about to dispatch into \u2014 dirty files mean someone is mid-flight there; (3) if the work follows a design doc, confirm exactly ONE doc claims BINDING for that feature. Real incident 2026-07-11: a post-compaction session dispatched a duplicate 3-agent wave against a second copy of the spec, into territory the first wave was actively editing."
+      }
+    },
+    {
+      "id": "compact-freeze-task",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Task"
+      },
+      "state": {
+        "counter": "compact_freeze",
+        "scope": "session"
+      },
+      "when": {
+        "counter_gte": 1,
+        "fire_once": true
+      },
+      "action": {
+        "type": "block",
+        "message": "POST-COMPACTION DISPATCH FREEZE (one-shot \u2014 consumes itself). Verify in-flight state against the world before dispatching: live agent roster / TaskList, git status of every target repo, and a single BINDING spec per feature. See compact-freeze-agent; same 2026-07-11 duplicate-wave incident."
+      }
+    },
+    {
+      "id": "compact-freeze-workflow",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Workflow"
+      },
+      "state": {
+        "counter": "compact_freeze",
+        "scope": "session"
+      },
+      "when": {
+        "counter_gte": 1,
+        "fire_once": true
+      },
+      "action": {
+        "type": "block",
+        "message": "POST-COMPACTION DISPATCH FREEZE (one-shot \u2014 consumes itself). A Workflow fan-out right after compaction is the highest-cost form of the 2026-07-11 duplicate-wave failure. Verify live agent roster / TaskList and git status of every target repo first, then re-invoke."
+      }
+    },
+    {
+      "id": "binding-spec-duplicate-write",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Write",
+        "builtin": "duplicate_binding_spec"
+      },
+      "state": {},
+      "when": {},
+      "action": {
+        "type": "block",
+        "message": "DUPLICATE BINDING SPEC BLOCKED \u2014 another docs/design/*.md sharing this filename's feature prefix already claims BINDING and is not marked SUPERSEDED. Exactly one live BINDING spec per feature: two of them is how the 2026-07-11 duplicate-wave dispatch happened (a post-compaction session built the second doc's copy of already-in-flight work). Either fold this content into the existing BINDING doc, or first edit the old doc's Status line to SUPERSEDED (naming its successor), then write this one."
+      }
+    },
+    {
+      "id": "binding-spec-duplicate-edit",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Edit",
+        "builtin": "duplicate_binding_spec"
+      },
+      "state": {},
+      "when": {},
+      "action": {
+        "type": "block",
+        "message": "DUPLICATE BINDING SPEC BLOCKED \u2014 this Edit adds BINDING to a docs/design/*.md whose feature prefix already has a live BINDING sibling (not SUPERSEDED). One live BINDING spec per feature. Mark the sibling SUPERSEDED first or merge into it. (Origin: 2026-07-11 duplicate-wave dispatch.)"
+      }
+    },
+    {
+      "id": "git-stash-bare",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Bash",
+        "command_regex": "(^|[;&|]\\s*)git\\s+stash(\\s+(push|save))?(\\s+(-[a-zA-Z]+|--[a-zA-Z][a-zA-Z-]*)(\\s+(\\\"[^\\\"]*\\\"|'[^']*'|[^-;&|\\s]\\S*))?)*\\s*($|[;&|])"
+      },
+      "state": {},
+      "when": {},
+      "action": {
+        "type": "block",
+        "message": "WHOLE-TREE git stash BLOCKED \u2014 a bare stash grabs EVERY dirty tracked file in the checkout, including other concurrent agents' and the user's uncommitted work (2026-07-11: a chained `git stash && test && git stash pop` timed out mid-chain, leaving another agent's in-progress files stashed off disk). Use a pathspec-limited stash for YOUR files only: git stash push -- <your paths>, or avoid stashing entirely: git diff <paths> to inspect, git checkout <sha> -- <paths> to extract. git stash pop/list/show/apply/drop remain allowed."
+      }
+    },
+    {
+      "id": "git-whole-tree-revert",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Bash",
+        "command_regex": "(^|[;&|]\\s*)git\\s+(checkout|restore)\\s+(HEAD\\s+)?(--\\s+)?\\.\\s*($|[;&|])"
+      },
+      "state": {},
+      "when": {},
+      "action": {
+        "type": "block",
+        "message": "WHOLE-TREE git revert BLOCKED \u2014 `git checkout .` / `git restore .` discards EVERY uncommitted change in the checkout, not just yours; in a shared tree that silently destroys concurrent agents' and the user's in-progress work (2026-07-11: a wave-2 agent's whole-tree checkout erased an uncommitted hearth-hermes implementation). Revert only files you own, by explicit path: git checkout -- <file> \u2026  or  git restore <file> \u2026"
+      }
+    },
+    {
+      "id": "git-clean-force",
+      "event": "PreToolUse",
+      "match": {
+        "tool": "Bash",
+        "command_regex": "(^|[;&|]\\s*)git\\s+clean\\s+[^;&|]*-[a-zA-Z]*f"
+      },
+      "state": {},
+      "when": {},
+      "action": {
+        "type": "block",
+        "message": "git clean -f BLOCKED \u2014 force-deleting untracked files in a shared checkout destroys other agents' not-yet-committed new files (untracked \u2260 unimportant: migrations, new modules, design docs all start untracked). Run git clean -n first to see the hit list, then delete specific paths with rm <path> so the removal is explicit and reviewable."
+      }
+    }
+  ]
+}
