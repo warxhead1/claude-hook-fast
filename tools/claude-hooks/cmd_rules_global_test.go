@@ -171,19 +171,3 @@ func TestCheckDuplicateBindingSpec(t *testing.T) {
 	})
 }
 
-func TestArmCompactFreeze(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	armCompactFreeze("sess-123")
-	sd := stateDir(home, "sess-123")
-	if got := readCounter(sd, "compact_freeze"); got != 1 {
-		t.Errorf("compact_freeze counter = %d, want 1", got)
-	}
-
-	armCompactFreeze("")
-	if got := readCounter(stateDir(home, "unknown"), "compact_freeze"); got != 1 {
-		t.Errorf("blank session should arm under 'unknown', got %d", got)
-	}
-}
-

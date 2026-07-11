@@ -672,6 +672,12 @@ func cmdSessionInit() {
 	transcriptPath := in.TranscriptPath
 	source := in.Source
 
+	// Post-compaction dispatch-state snapshot: fires on every source=="compact"
+	// invocation regardless of which branch below this session falls into
+	// (new/continuation/fallback), so defer it up front rather than threading
+	// it through every return path. See emitCompactDispatchState doc comment.
+	defer emitCompactDispatchState(source, in.EffectiveCWD())
+
 	// Detect window and conversation.
 	windowId := detectWindowID()
 	convId := extractConversationUUID(transcriptPath)
@@ -761,4 +767,120 @@ func handleFallbackSession(sessionId, windowId, source string) {
 
 	logTmux("Fallback session %s handled", sessionId)
 	_ = source // used in JS for cleanup context but not needed here
+}
+
+// ---------- post-compaction dispatch-state snapshot ----------
+//
+// Replaces the removed "compact freeze" design (cmd_compact_freeze.go,
+// commit c3dfe6a, reverted 2026-07-11): that design armed a per-session
+// counter on PreCompact and three global rules exit-2-blocked the FIRST
+// post-compaction Agent/Task/Workflow dispatch with a lecture telling the
+// model to go check git status / TaskList itself. That burns a full failed
+// dispatch plus an identical retry to demand verification the hook could
+// have just performed. The replacement below does the mechanical part
+// itself — git status counts — and injects it as SessionStart context
+// instead of blocking anything. Blocks stay reserved for mechanically
+// detected hazards (see the isolation/git-whole-tree rules in
+// configs/global-hook-rules.json); this is advisory, not enforcement.
+
+// compactDispatchStateTimeout bounds the whole snapshot (rev-parse +
+// status --porcelain, run sequentially against one repo). Either call
+// timing out or erroring fails soft to no output — this must never delay
+// or block SessionStart.
+const compactDispatchStateTimeout = 1 * time.Second
+
+// compactDispatchStateBlock builds the "## DISPATCH STATE (live at
+// compaction)" context block for one repo: the repo containing the
+// session's cwd, per the hook payload.
+//
+// Scope is deliberately narrow. The only OTHER session-relevant repos
+// worth adding would come from this binary's own session-state tracking
+// (siConversationsFile / siProcessRegistryFile / plan-resume's
+// plans-<convId>.json) — but as of this writing none of that state tracks
+// a *set of repos touched by the session*; it all keys on
+// conversation/window/plan IDs within a single project. So today this
+// function only ever reports the cwd repo. That is an acceptable, honest
+// result — NOT a reason to fall back to scanning ~/projects, which the
+// operator has explicitly ruled out (unscoped git-status sweeps burn
+// wall-clock across unrelated repos and report on work nobody dispatched
+// into). If session-relevant multi-repo tracking is added later, extend
+// the repo list built here instead.
+//
+// Returns "" (fail-soft) when cwd is empty, isn't inside a git repo, or
+// either git call errors/times out.
+func compactDispatchStateBlock(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), compactDispatchStateTimeout)
+	defer cancel()
+
+	rootOut, err := osexec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--show-toplevel").Output() //nolint:gosec
+	if err != nil {
+		return ""
+	}
+	repoRoot := strings.TrimSpace(string(rootOut))
+	if repoRoot == "" {
+		return ""
+	}
+
+	statusOut, err := osexec.CommandContext(ctx, "git", "-C", repoRoot, "status", "--porcelain").Output() //nolint:gosec
+	if err != nil {
+		return ""
+	}
+
+	dirty := 0
+	for _, line := range strings.Split(string(statusOut), "\n") {
+		if strings.TrimSpace(line) != "" {
+			dirty++
+		}
+	}
+
+	repoName := filepath.Base(repoRoot)
+	var b strings.Builder
+	b.WriteString("## DISPATCH STATE (live at compaction)\n")
+	fmt.Fprintf(&b, "- %s (%s): %d dirty path(s) [git status --porcelain]\n", repoName, repoRoot, dirty)
+	b.WriteString("\nBefore re-dispatching from a compacted summary: check TaskList/agent roster for existing owners; one BINDING design doc per feature.")
+	return b.String()
+}
+
+// buildCompactDispatchStateOutput returns the ready-to-print
+// hookSpecificOutput JSON line for SessionStart, or "" when there's
+// nothing to say: source isn't "compact", or compactDispatchStateBlock
+// itself came back empty (non-repo cwd, git error/timeout). Split out
+// from emitCompactDispatchState so the gating logic is testable without
+// capturing stdout.
+func buildCompactDispatchStateOutput(source, cwd string) string {
+	if source != "compact" {
+		return ""
+	}
+	block := compactDispatchStateBlock(cwd)
+	if block == "" {
+		return ""
+	}
+	out := map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":     "SessionStart",
+			"additionalContext": block,
+		},
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// emitCompactDispatchState prints the dispatch-state snapshot to stdout
+// (Claude Code folds SessionStart hookSpecificOutput.additionalContext
+// into the fresh post-compaction context window) when source=="compact"
+// and a snapshot was buildable. No-op otherwise — matches every other
+// session-init path's FAF discipline (never panic, never block).
+func emitCompactDispatchState(source, cwd string) {
+	line := buildCompactDispatchStateOutput(source, cwd)
+	if line == "" {
+		return
+	}
+	fmt.Println(line)
 }

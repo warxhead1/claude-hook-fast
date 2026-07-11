@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -350,5 +351,109 @@ func TestFormatDuration(t *testing.T) {
 		if got != c.want {
 			t.Errorf("formatDuration(%d) = %q want %q", c.ms, got, c.want)
 		}
+	}
+}
+
+// ---------- compact dispatch-state snapshot ----------
+
+// gitRepo creates a throwaway git repo under t.TempDir(), with an optional
+// dirty untracked file, and returns its root path. Skips the test if git
+// isn't on PATH (matches this repo's fail-soft philosophy: the feature
+// itself must never hard-require git, but the test needs it to set up
+// a fixture).
+func gitRepo(t *testing.T, withDirtyFile bool) string {
+	t.Helper()
+	if _, err := osexec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		cmd := osexec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	if withDirtyFile {
+		if err := os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestCompactDispatchStateBlock_EmptyCWD(t *testing.T) {
+	if got := compactDispatchStateBlock(""); got != "" {
+		t.Errorf("empty cwd should fail soft to empty string, got %q", got)
+	}
+}
+
+func TestCompactDispatchStateBlock_NonRepoCWD(t *testing.T) {
+	dir := t.TempDir() // not a git repo
+	if got := compactDispatchStateBlock(dir); got != "" {
+		t.Errorf("non-repo cwd should fail soft to empty string, got %q", got)
+	}
+}
+
+func TestCompactDispatchStateBlock_CleanRepo(t *testing.T) {
+	dir := gitRepo(t, false)
+	got := compactDispatchStateBlock(dir)
+	if !strings.Contains(got, "## DISPATCH STATE (live at compaction)") {
+		t.Errorf("missing header: %q", got)
+	}
+	if !strings.Contains(got, "0 dirty path(s)") {
+		t.Errorf("expected 0 dirty paths for a clean repo, got %q", got)
+	}
+	if !strings.Contains(got, "Before re-dispatching from a compacted summary") {
+		t.Errorf("missing closing guidance line: %q", got)
+	}
+}
+
+func TestCompactDispatchStateBlock_DirtyRepo(t *testing.T) {
+	dir := gitRepo(t, true)
+	got := compactDispatchStateBlock(dir)
+	if !strings.Contains(got, "1 dirty path(s)") {
+		t.Errorf("expected 1 dirty path, got %q", got)
+	}
+}
+
+func TestBuildCompactDispatchStateOutput_SourceGating(t *testing.T) {
+	dir := gitRepo(t, true)
+
+	for _, source := range []string{"startup", "resume", "clear", "", "not-compact"} {
+		if got := buildCompactDispatchStateOutput(source, dir); got != "" {
+			t.Errorf("source=%q should suppress output entirely, got %q", source, got)
+		}
+	}
+
+	got := buildCompactDispatchStateOutput("compact", dir)
+	if got == "" {
+		t.Fatal("source=compact against a real repo should produce output")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, got)
+	}
+	hso, ok := parsed["hookSpecificOutput"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing hookSpecificOutput: %s", got)
+	}
+	if hso["hookEventName"] != "SessionStart" {
+		t.Errorf("hookEventName = %v, want SessionStart", hso["hookEventName"])
+	}
+	ctx, _ := hso["additionalContext"].(string)
+	if !strings.Contains(ctx, "DISPATCH STATE") {
+		t.Errorf("additionalContext missing DISPATCH STATE block: %q", ctx)
+	}
+}
+
+func TestBuildCompactDispatchStateOutput_NonRepoCWDFailsSoft(t *testing.T) {
+	dir := t.TempDir() // not a git repo
+	if got := buildCompactDispatchStateOutput("compact", dir); got != "" {
+		t.Errorf("compact source against a non-repo cwd should fail soft to empty, got %q", got)
 	}
 }
