@@ -572,7 +572,43 @@ func emitSessionLifecycleFromInput(in event.HookInput, nbEvent string) {
 	if in.Message != "" {
 		env["message"] = in.Message
 	}
+	// R6/X1: emit the bare pane_id the hearth pane arbiter keys on so
+	// turn_end/started become a HookReported pane-binding edge — the
+	// strongest arbiter hint (design §2.2). Deliberately NOT context_pct
+	// (R6: obsoleted by hearth's server-side token computation).
+	//
+	if pane := sessionLifecyclePaneID(in); pane != "" {
+		env["pane_id"] = pane
+	}
 	publishNbusEnvelope(chanAgentSession, env, can)
+}
+
+// sessionLifecyclePaneID returns the pane_id to bind on a lifecycle envelope,
+// or "" to omit it.
+//
+// Subagent-inheritance guard: a Task-tool subagent hook fires with
+// ParentToolUseID set (AgentKind() == "host_subagent") but inherits the
+// PARENT's TMUX_PANE/ZELLIJ_PANE_ID env. Emitting pane_id for it would bind
+// the subagent's session_id to the parent's pane and corrupt hearth's
+// one-pane-one-session invariant, so we suppress it and bind only for a
+// top-level session. (transcript_path already rides baseEnvelope for both.)
+func sessionLifecyclePaneID(in event.HookInput) string {
+	if in.ParentToolUseID != "" {
+		return ""
+	}
+	return paneIDForArbiter()
+}
+
+// paneIDForArbiter returns the bare pane identifier the hearth pane arbiter
+// keys on: raw tmux "%N" (hearth stores tmux panes unprefixed, as
+// discover_agent_panes emits them), or the qualified "zellij:<session>:<pane>"
+// form. Empty when neither multiplexer is present. This differs from
+// event.PaneIDQualified only in that tmux is left unprefixed (no "tmux:").
+func paneIDForArbiter() string {
+	if s, p := os.Getenv("ZELLIJ_SESSION_NAME"), os.Getenv("ZELLIJ_PANE_ID"); s != "" && p != "" {
+		return "zellij:" + s + ":" + p
+	}
+	return os.Getenv("TMUX_PANE")
 }
 
 // cmdRegisterWithHearthLoom replaces session-start/register-with-hearth-loom.sh.

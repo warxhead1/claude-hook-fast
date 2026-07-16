@@ -52,13 +52,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/nbuspub"
 	"github.com/warxhead1/claude-hook-fast/internal/hooks/project"
 )
 
@@ -66,10 +66,6 @@ const (
 	chanAgentActivity = "bus.agent.activity.v1"
 	chanAgentSession  = "agent.session.v1"
 )
-
-// PublishTimeout is retained for compatibility but no longer used for blocking;
-// nervous publish runs fire-and-forget to avoid hitting the Claude Code 2s hook timeout.
-const PublishTimeout = 2 * time.Second
 
 type hookPayload struct {
 	SessionID     string `json:"session_id"`
@@ -79,57 +75,6 @@ type hookPayload struct {
 	TurnID        string `json:"turn_id,omitempty"`
 	ToolName      string `json:"tool_name,omitempty"`
 	Input         json.RawMessage `json:"input,omitempty"`
-}
-
-func SourceTag(project string) string {
-	if project == "" {
-		project = "unknown"
-	}
-	return "/claude-host/" + project
-}
-
-func Publish(channel, source, payload string) error {
-	if _, err := exec.LookPath("nervous"); err != nil {
-		return nil
-	}
-	// Fire-and-forget: don't block waiting for nervous publish to complete.
-	// Claude Code kills hooks that run longer than 2s; nervous publish can
-	// occasionally be slow, so we launch it async and return immediately.
-	cmd := exec.Command("nervous", "publish", channel, payload)
-	cmd.Env = childEnv(source)
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go cmd.Wait() //nolint:errcheck // prevent zombie; result not needed
-	return nil
-}
-
-func childEnv(source string) []string {
-	env := os.Environ()
-	out := env[:0]
-	const prefix = "NERVOUS_SOURCE="
-	for _, kv := range env {
-		if len(kv) >= len(prefix) && kv[:len(prefix)] == prefix {
-			continue
-		}
-		out = append(out, kv)
-	}
-	hasNoZellij := false
-	const zk = "NERVOUS_NO_ZELLIJ="
-	for _, kv := range out {
-		if len(kv) >= len(zk) && kv[:len(zk)] == zk {
-			hasNoZellij = true
-			break
-		}
-	}
-	if !hasNoZellij {
-		out = append(out, "NERVOUS_NO_ZELLIJ=1")
-	}
-	out = append(out, prefix+source)
-	return out
 }
 
 func newCodexHookCmd() *cobra.Command {
@@ -167,7 +112,17 @@ func detectAgentKind() string {
 	return "claude-code"
 }
 
-func activityEvent(sessionID, cwd, model, nbEvent string) {
+// activityEvent builds+publishes a bus.agent.activity.v1 envelope. toolName
+// and toolSummary are attached when non-empty — pulse/pre-tool thread the
+// codex tool invocation through so hearth's activity feed carries what the
+// agent is doing (mirroring the Claude PostToolUse tool_name/tool_summary
+// enrichment). Lifecycle callers (session-start/stop) pass "".
+//
+// Codex hook stdin (session_id/cwd/model/tool_name/input) carries NO token
+// usage — unlike Claude's transcript-tail read — so token counts are not
+// emitted here; that enrichment lives hearth-side where codex rollout parsing
+// (codex_jsonl) already exists.
+func activityEvent(sessionID, cwd, model, nbEvent, toolName, toolSummary string) {
 	can, wt := project.Resolve(cwd)
 	kind := detectAgentKind()
 	env := map[string]any{
@@ -183,10 +138,48 @@ func activityEvent(sessionID, cwd, model, nbEvent string) {
 		"cwd":          cwd,
 		"model":        model,
 		"source_kind":  kind,
-		"pane_id":      os.Getenv("ZELLIJ_PANE_ID"),
+		"pane_id":      codexPaneID(),
 		"session_name": os.Getenv("ZELLIJ_SESSION_NAME"),
 	}
+	if toolName != "" {
+		env["tool_name"] = toolName
+	}
+	if toolSummary != "" {
+		env["tool_summary"] = toolSummary
+	}
 	publishEnvelope(chanAgentActivity, env, can)
+}
+
+// codexPaneID captures the pane the codex hook fired in, preferring zellij's
+// bare pane id (paired with session_name in the envelope) and falling back to
+// the raw tmux "%N" pane. Adds the TMUX_PANE fallback that activityEvent/
+// sessionEvent previously lacked (X1 parity) — without it, tmux-only sessions
+// emitted an empty pane_id and could not be pane-bound by hearth.
+func codexPaneID() string {
+	if p := os.Getenv("ZELLIJ_PANE_ID"); p != "" {
+		return p
+	}
+	return os.Getenv("TMUX_PANE")
+}
+
+// codexToolSummary produces a bounded, human-readable summary of a codex tool
+// invocation, mirroring the claude-hooks boundToolSummary: prefer a
+// description/command field from the tool input, else the raw input JSON,
+// truncated. Empty when there is no tool input to summarize.
+func codexToolSummary(p *hookPayload) string {
+	if len(p.Input) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(p.Input, &m); err == nil {
+		if desc, _ := m["description"].(string); desc != "" {
+			return truncate(desc, 200)
+		}
+		if command, _ := m["command"].(string); command != "" {
+			return truncate(command, 200)
+		}
+	}
+	return truncate(string(p.Input), 200)
 }
 
 func sessionEvent(sessionID, cwd, model, nbEvent string) {
@@ -205,7 +198,7 @@ func sessionEvent(sessionID, cwd, model, nbEvent string) {
 		"cwd":          cwd,
 		"model":        model,
 		"source_kind":  kind,
-		"pane_id":      os.Getenv("ZELLIJ_PANE_ID"),
+		"pane_id":      codexPaneID(),
 		"session_name": os.Getenv("ZELLIJ_SESSION_NAME"),
 	}
 	publishEnvelope(chanAgentSession, env, can)
@@ -226,7 +219,10 @@ func publishEnvelope(channel string, env map[string]any, sourceProject string) {
 	if err != nil {
 		return
 	}
-	_ = Publish(channel, SourceTag(sourceProject), string(body))
+	// Consolidated onto the same-repo nbuspub.Publish the Claude PostToolUse
+	// path uses: it bounds `nervous publish` at 2s and logs failures via
+	// hooklog, replacing codex's earlier hand-rolled untimed/unlogged copy.
+	_ = nbuspub.Publish(channel, nbuspub.SourceTag(sourceProject), string(body))
 }
 
 func newCodexHookSessionStartCmd() *cobra.Command {
@@ -238,7 +234,7 @@ func newCodexHookSessionStartCmd() *cobra.Command {
 			if p.SessionID == "" {
 				return nil
 			}
-			activityEvent(p.SessionID, p.CWD, p.Model, "started")
+			activityEvent(p.SessionID, p.CWD, p.Model, "started", "", "")
 			sessionEvent(p.SessionID, p.CWD, p.Model, "started")
 			return nil
 		},
@@ -254,7 +250,7 @@ func newCodexHookStopCmd() *cobra.Command {
 			if p.SessionID == "" {
 				return nil
 			}
-			activityEvent(p.SessionID, p.CWD, "", "ended")
+			activityEvent(p.SessionID, p.CWD, "", "ended", "", "")
 			sessionEvent(p.SessionID, p.CWD, "", "ended")
 			return nil
 		},
@@ -268,7 +264,7 @@ func newCodexHookPulseCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, _ := readPayload()
 			if p.SessionID != "" {
-				activityEvent(p.SessionID, p.CWD, "", "heartbeat")
+				activityEvent(p.SessionID, p.CWD, "", "heartbeat", p.ToolName, codexToolSummary(p))
 			}
 			return nil
 		},
@@ -282,7 +278,7 @@ func newCodexHookPreToolCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, _ := readPayload()
 			if p.SessionID != "" {
-				activityEvent(p.SessionID, p.CWD, "", "heartbeat")
+				activityEvent(p.SessionID, p.CWD, "", "heartbeat", p.ToolName, codexToolSummary(p))
 			}
 			return nil
 		},
