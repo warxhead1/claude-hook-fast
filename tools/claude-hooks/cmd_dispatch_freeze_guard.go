@@ -7,7 +7,7 @@ package main
 //
 //  1. AUTO-FREEZE: drop a wave-freeze marker for every repo the wave touches
 //     (the cwd's repo plus any primary checkout referenced through a
-//     sanctioned worktree path). While fresh (8h TTL), worktree-write-guard
+//     sanctioned worktree path). While fresh (2h TTL), worktree-write-guard
 //     and worktree-bash-guard block all writes to those shared checkouts.
 //     Lift after integration: `wave-freeze off <repo-root>`.
 //

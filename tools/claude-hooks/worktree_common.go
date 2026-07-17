@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const wgTTL = 8 * time.Hour
+const wgTTL = 2 * time.Hour
 
 var wgAllowRelPrefixes = []string{".planning/", ".claude/", ".beads/"}
 var wgEphemeralPrefixes = []string{"/tmp/", "/var/tmp/", "/dev/shm/"}
