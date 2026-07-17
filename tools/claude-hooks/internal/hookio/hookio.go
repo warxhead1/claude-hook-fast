@@ -17,6 +17,7 @@ type HookInput struct {
 	ConversationID    string          `json:"conversation_id,omitempty"`
 	Message           string          `json:"message,omitempty"`
 	PermissionMode    string          `json:"permission_mode,omitempty"`
+	Cwd               string          `json:"cwd,omitempty"`
 }
 
 func ReadHookInput() (*HookInput, bool) {

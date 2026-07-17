@@ -85,6 +85,14 @@ func main() {
 		cmdMemoryStaleness()
 	case "kb-prime-siblings":
 		cmdKbPrimeSiblings()
+	// Worktree-isolation guard family (ports of the retired
+	// ~/.claude/hooks/pre-tool-use/*.py one-offs; see worktree_common.go).
+	case "worktree-bash-guard":
+		cmdWorktreeBashGuard()
+	case "worktree-write-guard":
+		cmdWorktreeWriteGuard()
+	case "dispatch-freeze-guard":
+		cmdDispatchFreezeGuard()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)
