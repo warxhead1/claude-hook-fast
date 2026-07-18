@@ -152,11 +152,32 @@ func (h HookInput) EffectiveCWD() string {
 	return ""
 }
 
+// IsSubagent reports whether this hook fired inside a Task-tool subagent
+// rather than a top-level Claude Code session.
+//
+// parent_tool_use_id is the documented signal, but Claude Code does NOT
+// populate it on every subagent hook — notably Stop / SubagentStop, where it
+// is frequently absent. Trusting it alone let subagents masquerade as
+// top-level sessions, which produced two live symptoms:
+//   - phantom "Agent stopped — awaiting input" phone notifications for
+//     worktree subagents (e.g. "tengine [agent-a65396b02f1705f90]"), and
+//   - subagents claiming their parent's inherited pane in the session
+//     arbiter, making the frozen-but-live parent vanish from the list.
+//
+// The transcript path is the reliable second signal: a subagent's transcript
+// ALWAYS lives under a /subagents/ segment (.../subagents/agent-<hex>.jsonl,
+// or .../subagents/workflows/wf_<id>/agent-<hex>.jsonl), while a top-level
+// session's transcript is .../<session-uuid>.jsonl and never does. This
+// mirrors steeringTargetID's detection in cmd_nbus.go.
+func (h HookInput) IsSubagent() bool {
+	return h.ParentToolUseID != "" || strings.Contains(h.TranscriptPath, "/subagents/")
+}
+
 // AgentKind tags whether the hook fired inside a Task-tool subagent
 // (host_subagent) or the top-level Claude Code session (host_claude_code).
 // Mirrors the bash hook semantics.
 func (h HookInput) AgentKind() string {
-	if h.ParentToolUseID != "" {
+	if h.IsSubagent() {
 		return "host_subagent"
 	}
 	return "host_claude_code"

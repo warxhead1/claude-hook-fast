@@ -35,6 +35,30 @@ func TestParse_OpencodeAliases(t *testing.T) {
 	}
 }
 
+func TestAgentKind_SubagentByTranscriptPath(t *testing.T) {
+	// parent_tool_use_id absent (Claude Code omits it on Stop/SubagentStop),
+	// but the transcript path self-identifies a subagent → host_subagent.
+	cases := []struct {
+		name       string
+		transcript string
+		want       string
+	}{
+		{"plain subagent", "/home/eric/.claude/projects/-home-eric-x/abc/subagents/agent-a65396b02f1705f90.jsonl", "host_subagent"},
+		{"workflow subagent", "/home/eric/.claude/projects/-home-eric-x/abc/subagents/workflows/wf_1/agent-x.jsonl", "host_subagent"},
+		{"top-level session", "/home/eric/.claude/projects/-home-eric-x/55483a8f-1234.jsonl", "host_claude_code"},
+		{"no transcript", "", "host_claude_code"},
+	}
+	for _, c := range cases {
+		h := HookInput{TranscriptPath: c.transcript}
+		if got := h.AgentKind(); got != c.want {
+			t.Errorf("%s: AgentKind = %q, want %q", c.name, got, c.want)
+		}
+		if got := h.IsSubagent(); got != (c.want == "host_subagent") {
+			t.Errorf("%s: IsSubagent = %v", c.name, got)
+		}
+	}
+}
+
 func TestParse_EmptyDoesNotPanic(t *testing.T) {
 	h := Parse(nil)
 	if h.SessionID != "" {
