@@ -164,13 +164,35 @@ func (h HookInput) EffectiveCWD() string {
 //   - subagents claiming their parent's inherited pane in the session
 //     arbiter, making the frozen-but-live parent vanish from the list.
 //
-// The transcript path is the reliable second signal: a subagent's transcript
-// ALWAYS lives under a /subagents/ segment (.../subagents/agent-<hex>.jsonl,
-// or .../subagents/workflows/wf_<id>/agent-<hex>.jsonl), while a top-level
-// session's transcript is .../<session-uuid>.jsonl and never does. This
-// mirrors steeringTargetID's detection in cmd_nbus.go.
+// Two reliable secondary signals cover the cases parent_tool_use_id misses:
+//
+//  1. Transcript path under a /subagents/ segment
+//     (.../subagents/agent-<hex>.jsonl, or
+//     .../subagents/workflows/wf_<id>/agent-<hex>.jsonl). A top-level
+//     session's transcript is .../<session-uuid>.jsonl and never does.
+//     Mirrors steeringTargetID's detection in cmd_nbus.go.
+//
+//  2. Effective cwd under an agent-dispatch worktree,
+//     <project>/.claude/worktrees/agent-<hex> (or the .bare/.claude/...
+//     variant). This is the one that catches the observed phantom: a
+//     SubagentStop for a worktree-isolated dispatch carries the PARENT's
+//     session_id AND the PARENT's top-level transcript (so signal 1 misses
+//     it), but its cwd is the worktree Claude Code minted for the dispatch.
+//     That "/.claude/worktrees/agent-" prefix is only ever created for
+//     dispatched agents, never a human checkout, so it is definitive. Without
+//     it, the dispatch surfaces as a phantom "Agent stopped — awaiting input"
+//     ping against the parent and claims the parent's inherited pane.
 func (h HookInput) IsSubagent() bool {
-	return h.ParentToolUseID != "" || strings.Contains(h.TranscriptPath, "/subagents/")
+	if h.ParentToolUseID != "" {
+		return true
+	}
+	if strings.Contains(h.TranscriptPath, "/subagents/") {
+		return true
+	}
+	if strings.Contains(h.EffectiveCWD(), "/.claude/worktrees/agent-") {
+		return true
+	}
+	return false
 }
 
 // AgentKind tags whether the hook fired inside a Task-tool subagent
