@@ -3,21 +3,22 @@
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now claude-steward
 #
-# Starts in OBSERVER mode (no actuation) by default. Phases are enabled via
-# flags on ExecStart:
-#   --enable-notify   Phase 1: advisory notifications
-#   --enable-compact  Phase 2: actuation (send-keys /compact)
-#   --enable-gate     Phase 2: rules-engine gate on fan-out
-#   --enable-fanout-block Phase 3: block new fan-out in CRITICAL state
+# Starts in OBSERVER mode (no actuation) by default: it only writes
+# ~/.claude/steward/budget.json. Continuous ticking is the default; --interval
+# sets the period. Phases are opened via flags on ExecStart:
+#   --enable-notify        Phase 0/1: advisory notifications on pressure rise
+#   --enable-gate          Phase 1: publish the fan-out gate for the rules engine
+#   --enable-compact       Phase 2: actuation (send-keys/socket /compact)
+#   --enable-fanout-block  Phase 3: block new fan-out in CRITICAL state
 #
-# To pause all actuation, create ~/.claude/steward/pause:
+# To pause all actuation, create ~/.claude/steward/pause (honored on the next
+# tick, no restart needed):
 #   touch ~/.claude/steward/pause
 #
 # Example ExecStart for Phase 2 (actuation + gating):
-#   ExecStart=%h/.local/bin/claude-steward --tick --interval 30 --enable-compact --enable-gate
+#   ExecStart=%h/.local/bin/claude-steward --interval 30 --enable-compact --enable-gate
 #
-# Kill switch removes itself on daemon restart; the pause file is checked
-# before every action and honored immediately.
+# The pause file is checked before every action and honored immediately.
 
 [Unit]
 Description=Claude session budget steward — rate-limit-aware session compaction
@@ -27,7 +28,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/claude-steward --tick --interval 30
+ExecStart=%h/.local/bin/claude-steward --interval 30
 Restart=on-failure
 RestartSec=10
 
