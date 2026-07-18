@@ -1,266 +1,197 @@
 package main
 
-// Tests for the claim-gate family (cmd_claim_gate.go).
+// Tests for the frozen T6 claim-gate contract (cmd_claim_gate.go):
+// edit-without-verify gate. Falsification cases per
+// .planning/design_top10_2026_07_18.md section T6:
 //
-// Two layers:
-//   - Unit tests against the pure functions (detectClaimGateEvents,
-//     applyClaimGateEvents, claimGateDecision, load/save) — fast, no
-//     subprocess.
-//   - Harness tests (TestClaimGateHarness*) that build the real binary and
-//     drive it over its actual JSON-stdin protocol, asserting the real
-//     process exit code for both the warn (0) and block (2) rungs of the
-//     ladder end-to-end.
+//   - session edits a .slang then Stops without verify -> flagged
+//   - same session after `shadergen diagnose` -> passes
+//   - docs-only session (.md edits only) -> never flagged
+//
+// Unit tests cover the pure classifier/whitelist/decision functions;
+// harness tests build the real binary and drive it over the actual
+// JSON-stdin protocol to prove exit codes end-to-end (0 warn / 2 block),
+// including the WARN-mode default (repeat Stops stay exit 0, no ladder)
+// and the BLOCK-mode config-flag opt-in.
 
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
-	"sync"
 	"testing"
 	"time"
 )
 
-// --- unit tests: detectClaimGateEvents ---
+// --- unit tests: claimGateIsGPUEffectful ---
 
-func TestDetectClaimGateEvents(t *testing.T) {
+func TestClaimGateIsGPUEffectful(t *testing.T) {
 	cases := []struct {
-		name    string
-		command string
-		want    []claimGateEvent
+		name string
+		fp   string
+		want bool
 	}{
-		{
-			name:    "claim-id-then-flag",
-			command: "bd update tengine-afjfd --claim",
-			want:    []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "claim-flag-then-id",
-			command: "bd update --claim tengine-afjfd",
-			want:    []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "update-without-claim-flag-is-not-a-claim",
-			command: "bd update tengine-afjfd --priority=1",
-			want:    nil,
-		},
-		{
-			name:    "bd-close",
-			command: "bd close tengine-afjfd",
-			want:    []claimGateEvent{{Kind: claimEventBdClose, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "bd-comment",
-			command: `bd comment tengine-afjfd "made progress, still working"`,
-			want:    []claimGateEvent{{Kind: claimEventBdComment, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "verify-pending-close-via-python3",
-			command: "python3 scripts/verify_pending.py close tengine-afjfd",
-			want:    []claimGateEvent{{Kind: claimEventVerifyClose, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "verify-pending-parked-bare",
-			command: "verify_pending.py parked tengine-afjfd",
-			want:    []claimGateEvent{{Kind: claimEventVerifyParked, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "handback-escape",
-			command: `echo UNVERIFIED-HANDBACK:tengine-afjfd "blocked by GPU driver bug, handing back"`,
-			want:    []claimGateEvent{{Kind: claimEventHandback, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "chained-claim-then-unrelated",
-			command: "bd update tengine-afjfd --claim && echo starting work",
-			want:    []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "unrelated-command-no-events",
-			command: "ls -la && git status --short",
-			want:    nil,
-		},
-		{
-			name:    "env-prefixed-bd-claim",
-			command: "FOO=bar bd update tengine-afjfd --claim",
-			want:    []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-afjfd"}},
-		},
-		{
-			name:    "multiple-segments-claim-and-close-different-beads",
-			command: "bd update tengine-aaaaa --claim; bd close tengine-bbbbb",
-			want: []claimGateEvent{
-				{Kind: claimEventClaim, BeadID: "tengine-aaaaa"},
-				{Kind: claimEventBdClose, BeadID: "tengine-bbbbb"},
-			},
-		},
+		{"slang-shader", "crates/tengine-dgc-hal/shaders/compute/cloud_baker.slang", true},
+		{"glsl-shader", "crates/tengine-dgc-hal/shaders/includes/buffer_types.glsl", true},
+		{"csrc-file", "crates/tengine-dgc-hal/csrc/ext_slang.c", true},
+		{"dgc-hal-src-rust", "crates/tengine-dgc-hal/src/core.rs", true},
+		{"generated-shader-excluded", "crates/tengine-dgc-hal/shaders/slang_generated/tengine_constants.slang", false},
+		{"generated-dir-excluded", "crates/tengine-dgc-hal/shaders/generated/registry.glsl", false},
+		{"docs-md-not-effectful", "docs/reference/WORK_TYPES.md", false},
+		{"unrelated-rust-not-in-dgc-hal-src", "crates/tengine-director-python/src/lib.rs", false},
+		{"empty-path", "", false},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := detectClaimGateEvents(tc.command)
-			if len(got) != len(tc.want) {
-				t.Fatalf("detectClaimGateEvents(%q) = %+v, want %+v", tc.command, got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Errorf("event[%d] = %+v, want %+v", i, got[i], tc.want[i])
-				}
+			if got := claimGateIsGPUEffectful(tc.fp); got != tc.want {
+				t.Errorf("claimGateIsGPUEffectful(%q) = %v, want %v", tc.fp, got, tc.want)
 			}
 		})
 	}
 }
 
-// --- unit tests: applyClaimGateEvents + undischargedIDs ---
+// --- unit tests: claimGateCommandIsVerifyWhitelisted ---
 
-func TestApplyClaimGateEventsLifecycle(t *testing.T) {
-	st := &claimGateState{SessionID: "s1", Claims: map[string]*claimGateClaim{}}
-	now := time.Now()
-
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-a"}}, now, false)
-	if got := undischargedIDs(st); len(got) != 1 || got[0] != "tengine-a" {
-		t.Fatalf("after claim: undischarged = %v, want [tengine-a]", got)
+func TestClaimGateCommandIsVerifyWhitelisted(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{"diagnose", "shadergen diagnose", true},
+		{"readiness", "shadergen readiness", true},
+		{"screenshot", "shadergen screenshot", true},
+		{"silo-benchmark", "silo_tester race_full --benchmark --json", true},
+		{"gpu-verify-lock", "bash scripts/gpu_verify_lock.sh race_full", true},
+		{"pixel-diff", "python3 scripts/pixel_diff.py before.png after.png", true},
+		{"render-metrics", "render_metrics.sh --silo race_full", true},
+		{"step-then-read-combo", "shadergen step 60 && shadergen read CameraState.position", true},
+		{"step-alone-insufficient", "shadergen step 60", false},
+		{"read-alone-insufficient", "shadergen read CameraState.position", false},
+		{"unrelated-command", "git status --short", false},
+		{"silo-tester-without-benchmark", "silo_tester race_full --frames=200", false},
+		{"prose-mention-not-invocation", `git commit -m "diagnose shadergen startup issue"`, false},
 	}
-
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventBdClose, BeadID: "tengine-a"}}, now, false)
-	if got := undischargedIDs(st); len(got) != 0 {
-		t.Fatalf("after close: undischarged = %v, want []", got)
-	}
-	if !st.Claims["tengine-a"].Discharged || st.Claims["tengine-a"].DischargeReason != claimEventBdClose {
-		t.Fatalf("claim not marked discharged correctly: %+v", st.Claims["tengine-a"])
-	}
-}
-
-func TestApplyClaimGateEventsToolIsErrorSkipsRecording(t *testing.T) {
-	st := &claimGateState{SessionID: "s1", Claims: map[string]*claimGateClaim{}}
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-a"}}, time.Now(), true)
-	if len(st.Claims) != 0 {
-		t.Fatalf("toolIsError=true must not record events, got claims=%v", st.Claims)
-	}
-}
-
-func TestApplyClaimGateEventsDischargeOfUntrackedBeadIsNoop(t *testing.T) {
-	st := &claimGateState{SessionID: "s1", Claims: map[string]*claimGateClaim{}}
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventBdClose, BeadID: "tengine-never-claimed"}}, time.Now(), false)
-	if len(st.Claims) != 0 {
-		t.Fatalf("discharge of untracked bead must be a no-op, got claims=%v", st.Claims)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claimGateCommandIsVerifyWhitelisted(tc.command); got != tc.want {
+				t.Errorf("claimGateCommandIsVerifyWhitelisted(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
 	}
 }
 
-func TestApplyClaimGateEventsHandbackDischarges(t *testing.T) {
-	st := &claimGateState{SessionID: "s1", Claims: map[string]*claimGateClaim{}}
-	now := time.Now()
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-a"}}, now, false)
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventHandback, BeadID: "tengine-a"}}, now, false)
-	if !st.Claims["tengine-a"].Discharged || st.Claims["tengine-a"].DischargeReason != claimEventHandback {
-		t.Fatalf("handback must discharge: %+v", st.Claims["tengine-a"])
+// --- unit tests: claimGateExtractHandbackReason ---
+
+func TestClaimGateExtractHandbackReason(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"quoted-reason", `echo UNVERIFIED-HANDBACK:"blocked by GPU driver bug"`, "blocked by GPU driver bug"},
+		{"bare-reason", "echo UNVERIFIED-HANDBACK:no-repro-on-this-hw", "no-repro-on-this-hw"},
+		{"no-marker", "echo hello world", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claimGateExtractHandbackReason(tc.command); got != tc.want {
+				t.Errorf("claimGateExtractHandbackReason(%q) = %q, want %q", tc.command, got, tc.want)
+			}
+		})
 	}
 }
 
-// --- unit tests: claimGateDecision ladder ---
+// --- unit tests: claimGateDecision ---
 
-func TestClaimGateDecisionLadder(t *testing.T) {
-	st := &claimGateState{SessionID: "s1", Claims: map[string]*claimGateClaim{}}
-
-	// No claims at all -> exit 0, silent.
-	if code, msg := claimGateDecision(st); code != 0 || msg != "" {
-		t.Fatalf("empty state: got (%d, %q), want (0, \"\")", code, msg)
+func TestClaimGateDecisionNoEdit(t *testing.T) {
+	st := &editVerifyGateState{SessionID: "s1"}
+	if code, msg := claimGateDecision(st, "warn"); code != 0 || msg != "" {
+		t.Fatalf("no edit: got (%d, %q), want (0, \"\")", code, msg)
 	}
+}
 
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-a"}}, time.Now(), false)
-
-	// First Stop with an undischarged claim -> warn, exit 0.
-	code, msg := claimGateDecision(st)
+func TestClaimGateDecisionEditNoVerifyWarnMode(t *testing.T) {
+	st := &editVerifyGateState{SessionID: "s1", LastEditTS: 100, LastEditFile: "x.slang"}
+	code, msg := claimGateDecision(st, "warn")
 	if code != 0 {
-		t.Fatalf("rung1: got exit %d, want 0", code)
+		t.Fatalf("warn mode: got exit %d, want 0", code)
 	}
 	if msg == "" {
-		t.Fatal("rung1: expected a warn message, got empty")
+		t.Fatal("warn mode: expected a WARN message")
 	}
-	if !st.Warned {
-		t.Fatal("rung1: expected Warned=true after first warn")
-	}
-	if !sameIDs(st.WarnedIDs, []string{"tengine-a"}) {
-		t.Fatalf("rung1: WarnedIDs = %v, want [tengine-a]", st.WarnedIDs)
-	}
+}
 
-	// Second Stop, same undischarged set -> block, exit 2.
-	code, msg = claimGateDecision(st)
+func TestClaimGateDecisionEditNoVerifyBlockMode(t *testing.T) {
+	st := &editVerifyGateState{SessionID: "s1", LastEditTS: 100, LastEditFile: "x.slang"}
+	code, msg := claimGateDecision(st, "block")
 	if code != 2 {
-		t.Fatalf("rung2: got exit %d, want 2", code)
+		t.Fatalf("block mode: got exit %d, want 2", code)
 	}
 	if msg == "" {
-		t.Fatal("rung2: expected a block message, got empty")
-	}
-
-	// Discharge it -> back to silent exit 0.
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventBdClose, BeadID: "tengine-a"}}, time.Now(), false)
-	if code, msg := claimGateDecision(st); code != 0 || msg != "" {
-		t.Fatalf("after discharge: got (%d, %q), want (0, \"\")", code, msg)
+		t.Fatal("block mode: expected a BLOCK message")
 	}
 }
 
-func TestClaimGateDecisionResetsLadderOnChangedSet(t *testing.T) {
-	st := &claimGateState{SessionID: "s1", Claims: map[string]*claimGateClaim{}}
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-a"}}, time.Now(), false)
+func TestClaimGateDecisionVerifiedAfterEditPasses(t *testing.T) {
+	st := &editVerifyGateState{SessionID: "s1", LastEditTS: 100, LastEditFile: "x.slang", LastVerifyTS: 200}
+	if code, msg := claimGateDecision(st, "block"); code != 0 || msg != "" {
+		t.Fatalf("verified after edit: got (%d, %q), want (0, \"\")", code, msg)
+	}
+}
 
-	if code, _ := claimGateDecision(st); code != 0 {
-		t.Fatalf("rung1 for tengine-a: got exit %d, want 0", code)
+func TestClaimGateDecisionStaleVerifyBeforeEditStillFlagged(t *testing.T) {
+	st := &editVerifyGateState{SessionID: "s1", LastEditTS: 200, LastEditFile: "x.slang", LastVerifyTS: 100}
+	code, msg := claimGateDecision(st, "warn")
+	if code != 0 || msg == "" {
+		t.Fatalf("stale verify (before edit): got (%d, %q), want (0, non-empty warn)", code, msg)
 	}
+}
 
-	// A second, different claim shows up before the next Stop — the
-	// undischarged set changed, so the ladder must warn again (rung 1),
-	// not jump straight to block.
-	applyClaimGateEvents(st, []claimGateEvent{{Kind: claimEventClaim, BeadID: "tengine-b"}}, time.Now(), false)
-	code, msg := claimGateDecision(st)
-	if code != 0 {
-		t.Fatalf("changed set: got exit %d, want 0 (re-warn)", code)
+func TestClaimGateDecisionHandbackAfterEditDischarges(t *testing.T) {
+	st := &editVerifyGateState{SessionID: "s1", LastEditTS: 100, LastEditFile: "x.slang", HandbackTS: 200}
+	if code, msg := claimGateDecision(st, "block"); code != 0 || msg != "" {
+		t.Fatalf("handback after edit: got (%d, %q), want (0, \"\")", code, msg)
 	}
-	if msg == "" {
-		t.Fatal("changed set: expected a warn message")
-	}
-	want := []string{"tengine-a", "tengine-b"}
-	sort.Strings(st.WarnedIDs)
-	if !sameIDs(st.WarnedIDs, want) {
-		t.Fatalf("WarnedIDs = %v, want %v", st.WarnedIDs, want)
+}
+
+func TestClaimGateDecisionHandbackBeforeEditStillFlagged(t *testing.T) {
+	st := &editVerifyGateState{SessionID: "s1", LastEditTS: 200, LastEditFile: "x.slang", HandbackTS: 100}
+	code, msg := claimGateDecision(st, "block")
+	if code != 2 || msg == "" {
+		t.Fatalf("stale handback (before edit): got (%d, %q), want (2, non-empty block)", code, msg)
 	}
 }
 
 // --- unit tests: state load/save fail-open ---
 
-func TestLoadClaimGateStateFailOpen(t *testing.T) {
+func TestLoadEditVerifyGateStateFailOpen(t *testing.T) {
 	dir := t.TempDir()
 
-	if _, ok := loadClaimGateState(filepath.Join(dir, "does-not-exist.json")); ok {
+	if _, ok := loadEditVerifyGateState(filepath.Join(dir, "missing.json")); ok {
 		t.Fatal("missing file: expected ok=false")
 	}
 
 	corrupt := filepath.Join(dir, "corrupt.json")
-	if err := os.WriteFile(corrupt, []byte("{not valid json"), 0o644); err != nil {
+	if err := os.WriteFile(corrupt, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := loadClaimGateState(corrupt); ok {
+	if _, ok := loadEditVerifyGateState(corrupt); ok {
 		t.Fatal("corrupt file: expected ok=false")
 	}
 
 	valid := filepath.Join(dir, "valid.json")
-	want := &claimGateState{SessionID: "s1", Claims: map[string]*claimGateClaim{
-		"tengine-a": {BeadID: "tengine-a", ClaimedAt: "t0"},
-	}}
-	if err := saveClaimGateState(valid, want); err != nil {
+	want := &editVerifyGateState{SessionID: "s1", LastEditTS: 42, LastEditFile: "x.slang"}
+	if err := saveEditVerifyGateState(valid, want); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := loadClaimGateState(valid)
-	if !ok {
-		t.Fatal("valid file: expected ok=true")
-	}
-	if got.SessionID != "s1" || got.Claims["tengine-a"].ClaimedAt != "t0" {
-		t.Fatalf("round-trip mismatch: %+v", got)
+	got, ok := loadEditVerifyGateState(valid)
+	if !ok || got.LastEditTS != 42 || got.LastEditFile != "x.slang" {
+		t.Fatalf("round-trip mismatch: ok=%v got=%+v", ok, got)
 	}
 }
 
-func TestClaimGateStatePath(t *testing.T) {
+func TestClaimGateStatePathFrozen(t *testing.T) {
 	orig := claimGateStateDir
 	defer func() { claimGateStateDir = orig }()
 	claimGateStateDir = "/tmp"
@@ -272,102 +203,62 @@ func TestClaimGateStatePath(t *testing.T) {
 	}
 }
 
-// --- harness: build the real binary and drive it over stdin JSON,
-// asserting real process exit codes end-to-end. ---
+func TestClaimGateModeDefaultsToWarn(t *testing.T) {
+	t.Setenv("CLAIM_GATE_MODE", "")
+	if got := claimGateMode(); got != "warn" {
+		t.Fatalf("empty env: claimGateMode() = %q, want warn", got)
+	}
+	t.Setenv("CLAIM_GATE_MODE", "block")
+	if got := claimGateMode(); got != "block" {
+		t.Fatalf("block env: claimGateMode() = %q, want block", got)
+	}
+	t.Setenv("CLAIM_GATE_MODE", "BLOCK")
+	if got := claimGateMode(); got != "block" {
+		t.Fatalf("BLOCK (case-insensitive) env: claimGateMode() = %q, want block", got)
+	}
+	t.Setenv("CLAIM_GATE_MODE", "garbage")
+	if got := claimGateMode(); got != "warn" {
+		t.Fatalf("garbage env: claimGateMode() = %q, want warn (fail-safe)", got)
+	}
+}
 
-var (
-	claimGateHarnessOnce sync.Once
-	claimGateHarnessBin  string
-	claimGateHarnessErr  error
-)
+// --- harness: build the real binary, drive the frozen falsification cases
+// end-to-end over the real JSON-stdin protocol. Reuses the shared harness
+// builder (buildBeadClaimGateHarnessBinary / runBeadClaimGateHarness) from
+// cmd_bead_claim_gate_test.go — same binary, different subcommands.
 
-// buildClaimGateHarnessBinary compiles the claude-hook-fast binary once for
-// the whole test binary run (not per-subtest, so t.TempDir()'s per-test
-// cleanup can't remove it out from under a later test).
-func buildClaimGateHarnessBinary(t *testing.T) string {
+func editToolInput(t *testing.T, filePath string) json.RawMessage {
 	t.Helper()
-	claimGateHarnessOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "claim-gate-harness-bin-")
-		if err != nil {
-			claimGateHarnessErr = err
-			return
-		}
-		bin := filepath.Join(dir, "claude-hook-fast-test")
-		cmd := exec.Command("go", "build", "-o", bin, ".")
-		cmd.Dir = mustGetwd(t)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			claimGateHarnessErr = fmt.Errorf("go build: %v\n%s", err, stderr.String())
-			return
-		}
-		claimGateHarnessBin = bin
+	b, err := json.Marshal(map[string]string{
+		"file_path": filePath,
+		"content":   "// edited",
 	})
-	if claimGateHarnessErr != nil {
-		t.Fatalf("failed to build harness binary: %v", claimGateHarnessErr)
-	}
-	return claimGateHarnessBin
-}
-
-func mustGetwd(t *testing.T) string {
-	t.Helper()
-	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return wd
+	return b
 }
 
-// harnessHookInput mirrors the subset of the Claude Code hook stdin JSON
-// protocol this feature consumes (see internal/hooks/event.HookInput).
-type harnessHookInput struct {
-	SessionID      string          `json:"session_id"`
-	ToolName       string          `json:"tool_name,omitempty"`
-	ToolInput      json.RawMessage `json:"tool_input,omitempty"`
-	ToolIsError    bool            `json:"tool_is_error,omitempty"`
-	TranscriptPath string          `json:"transcript_path,omitempty"`
-	CWD            string          `json:"cwd,omitempty"`
-}
-
-// runClaimGateHarness invokes the built binary with the given subcommand,
-// feeding stdin JSON, and returns (exitCode, stdout, stderr).
-func runClaimGateHarness(t *testing.T, bin, subcommand string, in harnessHookInput, home string) (int, string, string) {
+func bashToolInput(t *testing.T, command string) json.RawMessage {
 	t.Helper()
-	payload, err := json.Marshal(in)
+	b, err := json.Marshal(map[string]string{"command": command})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, subcommand)
-	cmd.Stdin = bytes.NewReader(payload)
-	cmd.Env = append(os.Environ(), "HOME="+home)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	exitCode := 0
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
-		} else {
-			t.Fatalf("subcommand %s failed to run: %v", subcommand, err)
-		}
-	}
-	return exitCode, stdout.String(), stderr.String()
+	return b
 }
 
-func TestClaimGateHarnessWarnThenBlock(t *testing.T) {
-	bin := buildClaimGateHarnessBinary(t)
+func TestClaimGateHarnessSlangEditThenStopWithoutVerifyFlagged(t *testing.T) {
+	bin := buildBeadClaimGateHarnessBinary(t)
 	home := t.TempDir()
-	sessionID := "harness-warn-block-01"
+	sessionID := "harness-frozen-slang-01"
 	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
 	t.Cleanup(func() { _ = os.Remove(statePath) })
 
-	toolInput, _ := json.Marshal(map[string]string{"command": "bd update tengine-hzz01 --claim"})
-	code, _, _ := runClaimGateHarness(t, bin, "claim-gate-track", harnessHookInput{
-		SessionID: sessionID,
-		ToolName:  "Bash",
-		ToolInput: toolInput,
-	}, home)
+	code, _, _ := runClaimGateFrozenHarness(t, bin, "claim-gate-track", harnessHookInput{
+		SessionID: sessionID, ToolName: "Edit",
+		ToolInput: editToolInput(t, "crates/tengine-dgc-hal/shaders/compute/cloud_baker.slang"),
+	}, home, "")
 	if code != 0 {
 		t.Fatalf("claim-gate-track exit = %d, want 0", code)
 	}
@@ -375,155 +266,181 @@ func TestClaimGateHarnessWarnThenBlock(t *testing.T) {
 		t.Fatalf("expected state file at %s: %v", statePath, err)
 	}
 
-	// First Stop: warn, exit 0.
-	code, stdout, _ := runClaimGateHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home)
+	// Falsification case 1: edit a .slang then Stop without verify -> flagged.
+	code, stdout, _ := runClaimGateFrozenHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home, "")
 	if code != 0 {
-		t.Fatalf("first claim-gate exit = %d, want 0 (warn rung)", code)
+		t.Fatalf("WARN mode: claim-gate exit = %d, want 0", code)
 	}
 	if !bytes.Contains([]byte(stdout), []byte("systemMessage")) {
-		t.Fatalf("first claim-gate stdout missing systemMessage: %q", stdout)
+		t.Fatalf("WARN mode: expected systemMessage flagging the edit, got stdout=%q", stdout)
 	}
-	if !bytes.Contains([]byte(stdout), []byte("tengine-hzz01")) {
-		t.Fatalf("first claim-gate stdout missing bead id: %q", stdout)
+	if !bytes.Contains([]byte(stdout), []byte("cloud_baker.slang")) {
+		t.Fatalf("WARN mode: expected flagged message to name the edited file, got %q", stdout)
 	}
 
-	// Second Stop, same undischarged claim: block, exit 2.
-	code, _, stderr := runClaimGateHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home)
-	if code != 2 {
-		t.Fatalf("second claim-gate exit = %d, want 2 (block rung)", code)
+	// WARN mode has no ladder: a repeat Stop with the same unresolved
+	// state must stay exit 0, not escalate to block.
+	code, stdout2, _ := runClaimGateFrozenHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home, "")
+	if code != 0 {
+		t.Fatalf("WARN mode repeat Stop: exit = %d, want 0 (no ladder)", code)
 	}
-	if !bytes.Contains([]byte(stderr), []byte("tengine-hzz01")) {
-		t.Fatalf("block stderr missing bead id: %q", stderr)
+	if !bytes.Contains([]byte(stdout2), []byte("systemMessage")) {
+		t.Fatalf("WARN mode repeat Stop: expected another systemMessage, got %q", stdout2)
 	}
 }
 
-func TestClaimGateHarnessDischargeAvoidsBlock(t *testing.T) {
-	bin := buildClaimGateHarnessBinary(t)
+func TestClaimGateHarnessBlockModeViaConfigFlag(t *testing.T) {
+	bin := buildBeadClaimGateHarnessBinary(t)
 	home := t.TempDir()
-	sessionID := "harness-discharge-01"
+	sessionID := "harness-frozen-block-01"
 	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
 	t.Cleanup(func() { _ = os.Remove(statePath) })
 
-	claimInput, _ := json.Marshal(map[string]string{"command": "bd update tengine-hzz02 --claim"})
-	runClaimGateHarness(t, bin, "claim-gate-track", harnessHookInput{
-		SessionID: sessionID, ToolName: "Bash", ToolInput: claimInput,
-	}, home)
+	runClaimGateFrozenHarness(t, bin, "claim-gate-track", harnessHookInput{
+		SessionID: sessionID, ToolName: "Write",
+		ToolInput: editToolInput(t, "crates/tengine-dgc-hal/csrc/ext_slang.c"),
+	}, home, "")
 
-	closeInput, _ := json.Marshal(map[string]string{"command": "bd close tengine-hzz02"})
-	runClaimGateHarness(t, bin, "claim-gate-track", harnessHookInput{
-		SessionID: sessionID, ToolName: "Bash", ToolInput: closeInput,
-	}, home)
+	// Opt-in BLOCK mode via the config flag.
+	code, _, stderr := runClaimGateFrozenHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home, "block")
+	if code != 2 {
+		t.Fatalf("BLOCK mode: claim-gate exit = %d, want 2", code)
+	}
+	if !bytes.Contains([]byte(stderr), []byte("ext_slang.c")) {
+		t.Fatalf("BLOCK mode: expected stderr to name the edited file, got %q", stderr)
+	}
+}
 
-	code, stdout, _ := runClaimGateHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home)
+func TestClaimGateHarnessSameSessionAfterDiagnosePasses(t *testing.T) {
+	bin := buildBeadClaimGateHarnessBinary(t)
+	home := t.TempDir()
+	sessionID := "harness-frozen-diagnose-01"
+	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
+	t.Cleanup(func() { _ = os.Remove(statePath) })
+
+	runClaimGateFrozenHarness(t, bin, "claim-gate-track", harnessHookInput{
+		SessionID: sessionID, ToolName: "Edit",
+		ToolInput: editToolInput(t, "crates/tengine-dgc-hal/shaders/compute/cloud_baker.slang"),
+	}, home, "")
+
+	// Give the verify timestamp room to sort strictly after the edit
+	// timestamp (both are wall-clock UnixNano within the same process).
+	time.Sleep(2 * time.Millisecond)
+
+	// Falsification case 2: same session after `shadergen diagnose` -> passes.
+	runClaimGateFrozenHarness(t, bin, "claim-gate-track", harnessHookInput{
+		SessionID: sessionID, ToolName: "Bash",
+		ToolInput: bashToolInput(t, "shadergen diagnose"),
+	}, home, "")
+
+	code, stdout, _ := runClaimGateFrozenHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home, "block")
 	if code != 0 {
-		t.Fatalf("claim-gate exit = %d, want 0 (discharged)", code)
+		t.Fatalf("post-diagnose: claim-gate exit = %d, want 0", code)
 	}
 	if stdout != "" {
-		t.Fatalf("discharged session should be silent, got stdout=%q", stdout)
+		t.Fatalf("post-diagnose: expected silent pass, got stdout=%q", stdout)
 	}
 }
 
-func TestClaimGateHarnessUnverifiedHandbackEscape(t *testing.T) {
-	bin := buildClaimGateHarnessBinary(t)
+func TestClaimGateHarnessDocsOnlySessionNeverFlagged(t *testing.T) {
+	bin := buildBeadClaimGateHarnessBinary(t)
 	home := t.TempDir()
-	sessionID := "harness-handback-01"
-	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
-	t.Cleanup(func() { _ = os.Remove(statePath) })
-
-	claimInput, _ := json.Marshal(map[string]string{"command": "bd update tengine-hzz03 --claim"})
-	runClaimGateHarness(t, bin, "claim-gate-track", harnessHookInput{
-		SessionID: sessionID, ToolName: "Bash", ToolInput: claimInput,
-	}, home)
-
-	handbackInput, _ := json.Marshal(map[string]string{
-		"command": `echo UNVERIFIED-HANDBACK:tengine-hzz03 "blocked, handing back"`,
-	})
-	runClaimGateHarness(t, bin, "claim-gate-track", harnessHookInput{
-		SessionID: sessionID, ToolName: "Bash", ToolInput: handbackInput,
-	}, home)
-
-	code, _, _ := runClaimGateHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home)
-	if code != 0 {
-		t.Fatalf("claim-gate exit = %d, want 0 (unverified-handback discharges)", code)
-	}
-}
-
-func TestClaimGateHarnessNoStateFileFailsOpen(t *testing.T) {
-	bin := buildClaimGateHarnessBinary(t)
-	home := t.TempDir()
-	sessionID := "harness-no-state-01"
-	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
-	_ = os.Remove(statePath) // ensure absent
-	t.Cleanup(func() { _ = os.Remove(statePath) })
-
-	code, stdout, stderr := runClaimGateHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home)
-	if code != 0 {
-		t.Fatalf("claim-gate exit = %d, want 0 (no state file)", code)
-	}
-	if stdout != "" || stderr != "" {
-		t.Fatalf("expected silent exit, got stdout=%q stderr=%q", stdout, stderr)
-	}
-}
-
-func TestClaimGateHarnessCorruptStateFailsOpen(t *testing.T) {
-	bin := buildClaimGateHarnessBinary(t)
-	home := t.TempDir()
-	sessionID := "harness-corrupt-state-01"
-	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
-	if err := os.WriteFile(statePath, []byte("{not json at all"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Remove(statePath) })
-
-	code, _, _ := runClaimGateHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home)
-	if code != 0 {
-		t.Fatalf("claim-gate exit = %d, want 0 (corrupt state fails open)", code)
-	}
-}
-
-func TestClaimGateHarnessNonClaimingSessionNeverWritesState(t *testing.T) {
-	bin := buildClaimGateHarnessBinary(t)
-	home := t.TempDir()
-	sessionID := "harness-non-claiming-01"
+	sessionID := "harness-frozen-docs-01"
 	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
 	_ = os.Remove(statePath)
 	t.Cleanup(func() { _ = os.Remove(statePath) })
 
-	unrelated, _ := json.Marshal(map[string]string{"command": "git status --short && ls -la"})
-	code, _, _ := runClaimGateHarness(t, bin, "claim-gate-track", harnessHookInput{
-		SessionID: sessionID, ToolName: "Bash", ToolInput: unrelated,
-	}, home)
+	// Falsification case 3: docs-only session (.md edits only) -> never flagged.
+	code, _, _ := runClaimGateFrozenHarness(t, bin, "claim-gate-track", harnessHookInput{
+		SessionID: sessionID, ToolName: "Edit",
+		ToolInput: editToolInput(t, "docs/reference/WORK_TYPES.md"),
+	}, home, "")
 	if code != 0 {
 		t.Fatalf("claim-gate-track exit = %d, want 0", code)
 	}
 	if _, err := os.Stat(statePath); err == nil {
-		t.Fatalf("non-claiming session must not create a state file at %s", statePath)
+		t.Fatalf("docs-only edit must not create a state file at %s", statePath)
 	}
 
-	code, _, _ = runClaimGateHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home)
+	code, stdout, _ := runClaimGateFrozenHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home, "block")
 	if code != 0 {
-		t.Fatalf("claim-gate exit = %d, want 0 (never claimed)", code)
+		t.Fatalf("docs-only session: claim-gate exit = %d, want 0", code)
+	}
+	if stdout != "" {
+		t.Fatalf("docs-only session: expected silent pass, got stdout=%q", stdout)
 	}
 }
 
-func TestClaimGateHarnessFailedClaimInvocationNotRecorded(t *testing.T) {
-	bin := buildClaimGateHarnessBinary(t)
+func TestClaimGateHarnessHandbackEscapeDischarges(t *testing.T) {
+	bin := buildBeadClaimGateHarnessBinary(t)
 	home := t.TempDir()
-	sessionID := "harness-failed-claim-01"
+	sessionID := "harness-frozen-handback-01"
+	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
+	t.Cleanup(func() { _ = os.Remove(statePath) })
+
+	runClaimGateFrozenHarness(t, bin, "claim-gate-track", harnessHookInput{
+		SessionID: sessionID, ToolName: "Edit",
+		ToolInput: editToolInput(t, "crates/tengine-dgc-hal/shaders/compute/cloud_baker.slang"),
+	}, home, "")
+
+	time.Sleep(2 * time.Millisecond)
+
+	runClaimGateFrozenHarness(t, bin, "claim-gate-track", harnessHookInput{
+		SessionID: sessionID, ToolName: "Bash",
+		ToolInput: bashToolInput(t, `echo UNVERIFIED-HANDBACK:"cannot repro on this GPU"`),
+	}, home, "")
+
+	code, _, _ := runClaimGateFrozenHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home, "block")
+	if code != 0 {
+		t.Fatalf("after handback: claim-gate exit = %d, want 0", code)
+	}
+}
+
+func TestClaimGateHarnessNoStateFileFailsOpenFrozen(t *testing.T) {
+	bin := buildBeadClaimGateHarnessBinary(t)
+	home := t.TempDir()
+	sessionID := "harness-frozen-no-state-01"
 	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
 	_ = os.Remove(statePath)
 	t.Cleanup(func() { _ = os.Remove(statePath) })
 
-	claimInput, _ := json.Marshal(map[string]string{"command": "bd update tengine-hzz04 --claim"})
-	runClaimGateHarness(t, bin, "claim-gate-track", harnessHookInput{
-		SessionID: sessionID, ToolName: "Bash", ToolInput: claimInput, ToolIsError: true,
-	}, home)
-
-	code, stdout, _ := runClaimGateHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home)
+	code, stdout, stderr := runClaimGateFrozenHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home, "block")
 	if code != 0 {
-		t.Fatalf("claim-gate exit = %d, want 0 (failed claim invocation never recorded)", code)
+		t.Fatalf("no state file: exit = %d, want 0", code)
 	}
-	if stdout != "" {
-		t.Fatalf("expected silent exit for never-recorded claim, got stdout=%q", stdout)
+	if stdout != "" || stderr != "" {
+		t.Fatalf("no state file: expected silent, got stdout=%q stderr=%q", stdout, stderr)
 	}
+}
+
+func TestClaimGateHarnessCorruptStateFailsOpenFrozen(t *testing.T) {
+	bin := buildBeadClaimGateHarnessBinary(t)
+	home := t.TempDir()
+	sessionID := "harness-frozen-corrupt-01"
+	statePath := "/tmp/claude-claim-gate-" + sessionID + ".json"
+	if err := os.WriteFile(statePath, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(statePath) })
+
+	code, _, _ := runClaimGateFrozenHarness(t, bin, "claim-gate", harnessHookInput{SessionID: sessionID}, home, "block")
+	if code != 0 {
+		t.Fatalf("corrupt state: exit = %d, want 0 (fail-open)", code)
+	}
+}
+
+// runClaimGateFrozenHarness wraps runBeadClaimGateHarness with an optional
+// CLAIM_GATE_MODE override (empty string leaves the default WARN mode).
+func runClaimGateFrozenHarness(t *testing.T, bin, subcommand string, in harnessHookInput, home, mode string) (int, string, string) {
+	t.Helper()
+	payload, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmdArgs := []string{subcommand}
+	env := append(os.Environ(), "HOME="+home)
+	if mode != "" {
+		env = append(env, "CLAIM_GATE_MODE="+mode)
+	}
+	return runHarnessProcess(t, bin, cmdArgs, payload, env)
 }

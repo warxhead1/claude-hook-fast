@@ -35,6 +35,8 @@ func cmdCleanupTmp() {
 		removeQuiet(fmt.Sprintf("/tmp/brain-hook-state-%s.json", id))
 		removeQuiet(fmt.Sprintf("/tmp/hearth-ctx-%s.json", id))
 		removeQuiet(fmt.Sprintf("/tmp/claude-context-cli_%s.json", id))
+		removeQuiet(fmt.Sprintf("/tmp/claude-claim-gate-%s.json", id))
+		removeQuiet(fmt.Sprintf("/tmp/claude-bead-claim-gate-%s.json", id))
 
 		short := id
 		if len(short) > 8 {
@@ -51,9 +53,11 @@ func cmdCleanupTmp() {
 	// /tmp scan (the original bash version's whole reason for setsid).
 	go func() {
 		_ = exec.Command("setsid", "bash", "-c",
-			`find /tmp -maxdepth 1 -name "brain-hook-state-*.json"   -mmin +2880 -delete 2>/dev/null
-			 find /tmp -maxdepth 1 -name "claude-context-cli_*.json" -mmin +2880 -delete 2>/dev/null
-			 find /tmp -maxdepth 1 -name "hearth-ctx-*.json"         -mmin +2880 -delete 2>/dev/null`,
+			`find /tmp -maxdepth 1 -name "brain-hook-state-*.json"     -mmin +2880 -delete 2>/dev/null
+			 find /tmp -maxdepth 1 -name "claude-context-cli_*.json"   -mmin +2880 -delete 2>/dev/null
+			 find /tmp -maxdepth 1 -name "hearth-ctx-*.json"           -mmin +2880 -delete 2>/dev/null
+			 find /tmp -maxdepth 1 -name "claude-claim-gate-*.json"    -mmin +2880 -delete 2>/dev/null
+			 find /tmp -maxdepth 1 -name "claude-bead-claim-gate-*.json" -mmin +2880 -delete 2>/dev/null`,
 		).Start()
 		time.Sleep(10 * time.Millisecond) // let setsid detach before we exit
 	}()

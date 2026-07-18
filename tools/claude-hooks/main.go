@@ -93,11 +93,18 @@ func main() {
 		cmdWorktreeWriteGuard()
 	case "dispatch-freeze-guard":
 		cmdDispatchFreezeGuard()
-	// Claim-gate: catches claimed-and-abandoned beads. See cmd_claim_gate.go.
+	// Claim-gate (T6 frozen contract): edit-without-verify gate. See
+	// cmd_claim_gate.go.
 	case "claim-gate-track":
 		cmdClaimGateTrack()
 	case "claim-gate":
 		cmdClaimGate()
+	// Bead-claim-gate: bonus companion catching claimed-and-abandoned
+	// beads. See cmd_bead_claim_gate.go.
+	case "bead-claim-gate-track":
+		cmdBeadClaimGateTrack()
+	case "bead-claim-gate":
+		cmdBeadClaimGate()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)
