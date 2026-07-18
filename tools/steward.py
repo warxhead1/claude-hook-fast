@@ -23,14 +23,16 @@ stdlib-only by design (json, os, socket, struct, time, glob, argparse,
 subprocess, dataclasses, enum) — no venv, no deps, runs anywhere Python 3
 runs. Promote stable policy to Go; do not let the two forks drift.
 
-Known signal-fidelity gap (NOT a policy divergence): Go can subscribe to the
-nervous-bus SubagentStart/SubagentStop events for exact lifecycle. This file
-has no bus subscriber, so `stopped` is conservatively always False (subagent
-.meta.json is write-once with no status field — filesystem gives no stop
-signal at all) and the Lingering() threshold is the only discriminator. The
-Lingering() predicate itself is byte-identical to Go's; only the input
-observation is coarser here, exactly as docs/design-budget-steward.md notes
-for the jsonl-mtime heartbeat.
+Subagent completion is read exactly as Go's reader reads it (see completion.go):
+NOT from the SubagentStart/SubagentStop hooks — those cannot identify an
+individual subagent (subagent_id is never populated; SubagentStop carries only
+the parent's identity). A dispatched subagent's .meta.json carries a `toolUseId`,
+and its completion is recorded in the PARENT session transcript as a
+`tool_result` bearing that id. Each parent transcript is tailed incrementally
+(append-only JSONL; cursor offset + completed-id set persisted in state.json's
+`completions` map) and a subagent is marked `stopped` once its `tool_result`
+appears. Subagents with no `toolUseId` (in-process teammates) fall back to
+mtime staleness alone. The Lingering() predicate is byte-identical to Go's.
 """
 
 from __future__ import annotations
@@ -404,12 +406,77 @@ def apply_roster(sessions: list) -> None:
             s.kind = SessionKind.BACKGROUND
 
 
-def read_subagents(sessions: list, now: datetime) -> list:
+def _scan_completed_ids(line: str, dst: set) -> None:
+    """Fold the tool_use_id of every tool_result carried by one transcript line
+    into dst. The substring gate skips the majority of lines that carry no
+    tool_result before the JSON parse; a line whose message.content is not a
+    list is skipped (never carries a tool_result)."""
+    if '"tool_result"' not in line:
+        return
+    try:
+        rec = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "tool_result" and item.get("tool_use_id"):
+            dst.add(item["tool_use_id"])
+
+
+def _completed_tool_ids(state: dict, path: str) -> set:
+    """Incrementally tail the parent transcript at `path`, advancing the cursor
+    stored in state['completions'][path] over only newly-appended whole lines,
+    and return the set of tool_use_ids seen completed. Mirrors Go's
+    completionTracker.advance: append-only JSONL, partial final line re-read
+    next tick, a shorter-than-offset file (rotation) resets the cursor."""
+    cursors = state.setdefault("completions", {})
+    cur = cursors.setdefault(path, {"offset": 0, "ids": []})
+    ids = set(cur["ids"])
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return ids
+    offset = cur["offset"]
+    if size < offset:            # truncated / rotated
+        offset, ids = 0, set()
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return ids
+    last_nl = data.rfind(b"\n")  # consume only through the last whole line
+    if last_nl >= 0:
+        whole = data[:last_nl + 1]
+        offset += len(whole)
+        for raw in whole.split(b"\n"):
+            if raw:
+                _scan_completed_ids(raw.decode("utf-8", "replace"), ids)
+    cur["offset"], cur["ids"] = offset, sorted(ids)
+    return ids
+
+
+def _prune_completions(state: dict) -> None:
+    """Drop completion cursors whose transcript no longer exists (ended
+    sessions), keeping state.json bounded by live churn."""
+    cursors = state.get("completions")
+    if not cursors:
+        return
+    for path in [p for p in cursors if not os.path.exists(p)]:
+        del cursors[path]
+
+
+def read_subagents(sessions: list, now: datetime, cfg: Config, state: dict) -> list:
     """Globs ~/.claude/projects/*/<sid>/subagents/agent-*.jsonl per session;
-    mtime age -> StaleFor. No filesystem-observable stop signal exists (see
-    module docstring), so `stopped` stays False and Lingering()'s threshold
-    is the only discriminator."""
-    out, active_cutoff = [], timedelta(minutes=5)
+    mtime age -> StaleFor. `stopped` is resolved from the parent transcript's
+    tool_result for the subagent's meta `toolUseId` (see module docstring); a
+    subagent with no toolUseId or an unconfirmed completion stays stopped=False
+    so mtime staleness alone decides. A completed subagent is never active."""
+    out = []
+    active_cutoff = cfg.lingering_subagent_after
     for s in sessions:
         pattern = os.path.join(PROJECTS_DIR, "*", s.id, "subagents", "agent-*.jsonl")
         active = 0
@@ -420,14 +487,23 @@ def read_subagents(sessions: list, now: datetime) -> list:
                 continue
             stale_for = max(now - datetime.fromtimestamp(mtime, tz=timezone.utc), timedelta(0))
             stem = os.path.basename(path)[:-len(".jsonl")]
-            name = stem
+            name, tool_use_id = stem, ""
             try:
                 with open(path[:-len(".jsonl")] + ".meta.json", "r") as f:
-                    name = json.load(f).get("name", name)
+                    meta = json.load(f)
+                name = meta.get("name", name)
+                tool_use_id = meta.get("toolUseId", "")
             except (OSError, json.JSONDecodeError):
                 pass
-            out.append(SubagentState(id=stem, parent_id=s.id, name=name, stale_for=stale_for))
-            active += stale_for < active_cutoff
+            stopped = False
+            if tool_use_id:
+                # subagents/ sits directly under the parent session dir; the
+                # parent transcript is that dir + ".jsonl".
+                parent_transcript = os.path.dirname(os.path.dirname(path)) + ".jsonl"
+                stopped = tool_use_id in _completed_tool_ids(state, parent_transcript)
+            out.append(SubagentState(id=stem, parent_id=s.id, name=name,
+                                     stopped=stopped, stale_for=stale_for))
+            active += (not stopped) and stale_for < active_cutoff
         s.subagents_active = active
     return out
 
@@ -487,7 +563,8 @@ def build_snapshot(now: datetime, cfg: Config, config_root: str, prev_level: Lev
     sessions = read_sessions(now)
     apply_context_files(sessions, now)
     apply_roster(sessions)
-    subagents = read_subagents(sessions, now)
+    subagents = read_subagents(sessions, now, cfg, state)
+    _prune_completions(state)
     read_ignored(sessions, config_root)
 
     apply_last_compact(sessions, state)
@@ -776,6 +853,49 @@ def selftest() -> None:
     snap = _snap(five_hour=Window(80, resets_at=now + timedelta(minutes=5), present=True),
                  config=cfg_r, sessions=[_mk_session()])
     assert not any(a.kind == ActionKind.COMPACT for a in decide(snap))
+
+    # subagent completion detection: incremental cursor + stopped resolution
+    import tempfile
+    def _tr(tid):
+        return ('{"type":"user","message":{"role":"user","content":'
+                '[{"type":"tool_result","tool_use_id":"%s","content":"ok"}]}}\n' % tid)
+    with tempfile.TemporaryDirectory() as td:
+        tpath = os.path.join(td, "parent.jsonl")
+        with open(tpath, "w") as f:
+            f.write(_tr("toolu_A"))
+        st = {}
+        assert "toolu_A" in _completed_tool_ids(st, tpath)
+        assert "toolu_B" not in _completed_tool_ids(st, tpath)
+        # a tool_use dispatch is not a completion; append + incremental pickup
+        with open(tpath, "a") as f:
+            f.write('{"type":"assistant","message":{"role":"assistant","content":'
+                    '[{"type":"tool_use","id":"toolu_X","name":"Task"}]}}\n')
+            f.write(_tr("toolu_B"))
+        got = _completed_tool_ids(st, tpath)
+        assert "toolu_B" in got and "toolu_X" not in got, got
+        # a stale, completed subagent is stopped and not lingering
+        subdir = os.path.join(td, "proj", "sess1", "subagents")
+        os.makedirs(subdir)
+        agent = os.path.join(subdir, "agent-done.jsonl")
+        with open(agent, "w") as f:
+            f.write("{}\n")
+        with open(agent[:-len(".jsonl")] + ".meta.json", "w") as f:
+            f.write('{"name":"done","toolUseId":"toolu_A"}')
+        with open(os.path.join(td, "proj", "sess1.jsonl"), "w") as f:
+            f.write(_tr("toolu_A"))
+        old = os.stat(agent).st_mtime - 1800
+        os.utime(agent, (old, old))
+        global PROJECTS_DIR
+        saved_projects = PROJECTS_DIR
+        try:
+            PROJECTS_DIR = td
+            sess = [_mk_session(id="sess1")]
+            subs = read_subagents(sess, now, default_config(), {})
+        finally:
+            PROJECTS_DIR = saved_projects
+        assert len(subs) == 1 and subs[0].stopped, subs
+        assert not subs[0].lingering(default_config().lingering_subagent_after)
+        assert sess[0].subagents_active == 0
 
     print("selftest ok")
 
