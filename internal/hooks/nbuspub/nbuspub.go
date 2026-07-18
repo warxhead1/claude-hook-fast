@@ -78,14 +78,18 @@ func PublishAsync(channel, source, payload string) error {
 	return cmd.Process.Release()
 }
 
-// WorkerMain is the detached-worker entry point: a plain bounded
-// synchronous Publish (with hooklog on failure). Both binaries dispatch
-// WorkerSubcommand here.
+// WorkerMain is the detached-worker entry point. Direct Go delivery
+// first (~2-5ms, zero interpreter spawns — see direct.go); the nervous
+// CLI (bounded, hooklog-on-failure) only as fallback, e.g. an authed
+// redis URL or an unusable payload.
 func WorkerMain(args []string) {
 	if len(args) != 3 {
 		return
 	}
-	_ = Publish(args[0], args[1], args[2])
+	if err := PublishDirect(args[0], args[1], args[2]); err != nil {
+		hooklog.Writef("nbus-direct fallback channel=%s err=%v", args[0], err)
+		_ = Publish(args[0], args[1], args[2])
+	}
 }
 
 // Publish shells out to `nervous publish <channel> <payload>` with
