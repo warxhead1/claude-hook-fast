@@ -16,7 +16,7 @@
 #   touch ~/.claude/steward/pause
 #
 # Example ExecStart for Phase 2 (actuation + gating):
-#   ExecStart=%h/.local/bin/claude-steward --interval 30 --enable-compact --enable-gate
+#   ExecStart=%h/.local/bin/claude-steward --interval 30s --enable-compact --enable-gate
 #
 # The pause file is checked before every action and honored immediately.
 
@@ -28,7 +28,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/claude-steward --interval 30
+ExecStart=%h/.local/bin/claude-steward --interval 30s
 Restart=on-failure
 RestartSec=10
 

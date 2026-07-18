@@ -54,9 +54,9 @@ install-hearth-loom-hook:
 
 install-steward: test
 	@mkdir -p "$(BIN)"
-	$(GO) build -trimpath -ldflags='-s -w' -o "$(BIN)/claude-steward.new.$$$$" ./cmd/claude-steward
+	$(GO) build -trimpath -ldflags='-s -w' -o "$(BIN)/.claude-steward.new" ./cmd/claude-steward
 	@[ -f "$(BIN)/claude-steward" ] && cp -p "$(BIN)/claude-steward" "$(BIN)/claude-steward.bak-$(TS)" || true
-	mv -f "$(BIN)/claude-steward.new.$$$$" "$(BIN)/claude-steward"
+	mv -f "$(BIN)/.claude-steward.new" "$(BIN)/claude-steward"
 	@echo "  claude-steward -> $(BIN)/claude-steward"
 
 # Housekeeping: prune install backups older than 14 days.
