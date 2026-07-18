@@ -36,7 +36,7 @@ watches the window and acts. The steward is a slim sidecar daemon that:
 | Per-session context % + pane | `$XDG_RUNTIME_DIR/hearth/context/claude-context-<sid>.json` and `/tmp/claude-context-cli_<sid>.json` — `{currentContext, tmux_pane, pid, is_subagent}` (written by statusline.js each render; subagents deliberately null pane/pid) | per render | derived from official statusline `context_window.remaining_percentage` |
 | Session liveness + busy/idle/waiting | `~/.claude/sessions/<pid>.json` — `{pid, sessionId, cwd, name, status: busy\|idle\|waiting, updatedAt, version, kind}` | live | Claude Code's own registry; verify pid against `/proc` |
 | Per-call token usage + model | nervous-bus `bus.agent.activity.v1` (input/output/cache_read/cache_write tokens, model, tool_use_id) — emitted by `nbus-activity` PostToolUse hook; or tail transcripts via `internal/hooks/transcript` | per tool call | transcript ground truth |
-| Subagent lifecycle | `bus.hearth.subagent.lifecycle.v1` (SubagentStart/SubagentStop hooks, already wired); transcripts at `~/.claude/projects/<slug>/<sid>/subagents/agent-*.jsonl` (+ `.meta.json`, write-once, no status field — use jsonl mtime as heartbeat) | event + mtime | hook events authoritative; mtime for staleness |
+| Subagent lifecycle | Subagent transcripts at `~/.claude/projects/<slug>/<sid>/subagents/agent-*.jsonl` (+ `.meta.json` carrying `toolUseId`, write-once, no status field). Completion is read from the **parent** transcript's `tool_result` for that `toolUseId`, NOT from the `SubagentStart`/`SubagentStop` hooks (which cannot identify an individual subagent — see below). jsonl mtime is the staleness heartbeat. | transcript pairing + mtime | parent `tool_result` authoritative for completion; mtime for staleness |
 | Turn boundaries | `Stop` hook / `agent.session.v1` turn_end (already emitted with pane_id) | per turn | official hook |
 | Autocompact levers | `settings.json` env: `CLAUDE_CODE_AUTO_COMPACT_WINDOW=375000`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` | static | user-configured |
 
@@ -157,8 +157,9 @@ inside the orchestrator's single process, with no PTY of its own.
 Consequences for the steward:
 - To wind down lingering subagents, the steward **acts on the parent session**
   (inject into its pane/socket, or notify), because the orchestrator is the only
-  thing that can stop or wait on its own children. `SubagentStart`/`SubagentStop`
-  give observability; there is no external per-subagent kill.
+  thing that can stop or wait on its own children. Per-subagent completion comes
+  from the parent transcript's `tool_result` (not the lifecycle hooks); there is
+  no external per-subagent kill.
 - The only per-subagent *steering* channel is hearth-loom's `steeringTargetID()`
   (addresses a subagent by transcript path) — but it is **pull-based**, delivered
   at the subagent's next `PreToolUse`; useless against an idle/blocked subagent.
@@ -197,10 +198,23 @@ that re-primes cheaply after the drought. So eligibility ranking =
 `(closest to cache expiry, largest C, longest idle)` first. Never compact the
 session the user is actively typing in (`busy`, or idle_for < 2min).
 
-Lingering subagent = `started` event without `stopped` AND its
-`subagents/agent-*.jsonl` mtime stale > 10min. Steward can't kill it; it
-reports (pane notification + bus event + status file) so the operator or the
-parent session acts, and it excludes the parent from compaction (a compact
+Lingering subagent = a subagent that has **not completed** AND whose
+`subagents/agent-*.jsonl` mtime is stale > 10min. Completion is NOT read from
+the `SubagentStart`/`SubagentStop` hooks — those cannot identify an individual
+subagent: `subagent_id` is never populated, `SubagentStop` carries only the
+parent's session_id + transcript, and start/stop counts do not reconcile
+(48 vs 121 in one observed 24h window). The authoritative, retroactively
+available completion signal is the `tool_use_id` ↔ `tool_result` pairing: a
+dispatched subagent's `.meta.json` carries a `toolUseId`, and its completion is
+recorded in the **parent** session transcript (`<slug>/<sid>.jsonl`) as a
+`tool_result` bearing that id. The steward tails each parent transcript
+incrementally (append-only JSONL; cursor offset + completed-id set persisted to
+`~/.claude/steward/completions.json`) and marks a subagent `Stopped` when its
+`tool_result` appears. Subagents with no `toolUseId` (in-process teammates) or
+whose completion is not yet confirmed fall back to mtime staleness alone.
+Steward can't kill a lingerer; it reports (pane notification + bus event +
+status file) so the operator or the parent session acts, and it excludes the
+parent from compaction while a subagent is genuinely still running (a compact
 under a running subagent loses the dispatch state).
 
 ## Architecture
