@@ -14,7 +14,7 @@ GO  ?= go
 TS  := $(shell date +%Y%m%d-%H%M%S)
 
 .PHONY: build test install install-claude-hook-fast install-codex-hook \
-        install-hearth-loom-hook clean-baks
+        install-hearth-loom-hook install-steward clean-baks
 
 build:
 	$(GO) build ./...
@@ -51,6 +51,13 @@ install-hearth-loom-hook:
 	@[ -f "$(BIN)/hearth-loom-hook" ] && cp -p "$(BIN)/hearth-loom-hook" "$(BIN)/hearth-loom-hook.bak-$(TS)" || true
 	mv -f "$(BIN)/.hearth-loom-hook.new" "$(BIN)/hearth-loom-hook"
 	@echo "  hearth-loom-hook -> $(BIN)/hearth-loom-hook"
+
+install-steward: test
+	@mkdir -p "$(BIN)"
+	$(GO) build -trimpath -ldflags='-s -w' -o "$(BIN)/claude-steward.new.$$$$" ./cmd/claude-steward
+	@[ -f "$(BIN)/claude-steward" ] && cp -p "$(BIN)/claude-steward" "$(BIN)/claude-steward.bak-$(TS)" || true
+	mv -f "$(BIN)/claude-steward.new.$$$$" "$(BIN)/claude-steward"
+	@echo "  claude-steward -> $(BIN)/claude-steward"
 
 # Housekeeping: prune install backups older than 14 days.
 clean-baks:

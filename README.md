@@ -26,6 +26,32 @@ publishing to nervous-bus and notifying the hearth-loom gateway.
 In-container HTTP-push observability shim used inside hearth-loom dispatch containers.
 Handles Claude Code and opencode hook events, POSTing to the hearth-loom gateway.
 
+### `claude-steward` (`cmd/claude-steward/`)
+Rate-limit-aware session budget steward. Watches the 5-hour subscription window,
+tracks per-session context utilization and burn rate, and compacts idle-but-relevant
+sessions under budget pressure so they survive rate-limit droughts in a resumable,
+cache-cheap state. Also surfaces lingering subagents to the operator for triage.
+
+Phases (opt-in via flags on one binary):
+- **Phase 0** (observer): ledger + budget metrics only, no actuation
+- **Phase 1** (advisory): rules-engine warnings on fan-out under pressure
+- **Phase 2** (actuation): compacts idle sessions via tmux; gating on new dispatch
+- **Phase 3** (hardening): blocks fan-out in CRITICAL state; PTY socket fallback
+
+Key files:
+- `~/.claude/steward/budget.json` — public contract: utilization, burn rate, per-session context, eligibility
+- `~/.claude/steward/gate.json` — rules engine input: budget state for `Agent|Task|Workflow` gating
+- `~/.claude/steward/actions.jsonl` — audit log of all actuation decisions
+- `~/.claude/steward/pause` — kill switch: `touch` to halt all actuation
+- `~/.claude/steward/ignore/<session_id>` — per-session opt-out from compaction
+
+Reference implementation: `tools/steward.py` (stdlib Python, ~300 lines; policy prototyping).
+Test: `python3 tools/steward.py --selftest`.
+
+Build and install: `make install-steward`.
+
+See `docs/design-budget-steward.md` for the full design, signal inventory, policy, and rollout ladder.
+
 ## Build
 
 ```bash

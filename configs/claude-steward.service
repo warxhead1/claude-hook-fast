@@ -1,0 +1,44 @@
+# claude-steward systemd USER unit
+# Install with:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-steward
+#
+# Starts in OBSERVER mode (no actuation) by default. Phases are enabled via
+# flags on ExecStart:
+#   --enable-notify   Phase 1: advisory notifications
+#   --enable-compact  Phase 2: actuation (send-keys /compact)
+#   --enable-gate     Phase 2: rules-engine gate on fan-out
+#   --enable-fanout-block Phase 3: block new fan-out in CRITICAL state
+#
+# To pause all actuation, create ~/.claude/steward/pause:
+#   touch ~/.claude/steward/pause
+#
+# Example ExecStart for Phase 2 (actuation + gating):
+#   ExecStart=%h/.local/bin/claude-steward --tick --interval 30 --enable-compact --enable-gate
+#
+# Kill switch removes itself on daemon restart; the pause file is checked
+# before every action and honored immediately.
+
+[Unit]
+Description=Claude session budget steward — rate-limit-aware session compaction
+Documentation=file://%h/.config/systemd/user/claude-steward.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claude-steward --tick --interval 30
+Restart=on-failure
+RestartSec=10
+
+# Low priority: steward is a background observer, must never contend with real work
+Nice=15
+IOSchedulingClass=idle
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-steward
+
+[Install]
+WantedBy=default.target
