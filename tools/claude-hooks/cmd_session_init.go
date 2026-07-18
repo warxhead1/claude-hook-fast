@@ -678,6 +678,13 @@ func cmdSessionInit() {
 	// it through every return path. See emitCompactDispatchState doc comment.
 	defer emitCompactDispatchState(source, in.EffectiveCWD())
 
+	// Stale-sessionId repair (see cmd_session_registry.go): older CC
+	// builds (2.1.205/2.1.209) never rewrite ~/.claude/sessions/<pid>.json
+	// when the session id rotates mid-process (/clear, resume). Runs
+	// regardless of which branch below this session falls into, same
+	// rationale as the compact-dispatch-state defer above.
+	defer srRepairStaleSessionID(srFindAncestorRegistryFile(srSessionsDir(), os.Getpid()), sessionId, time.Now())
+
 	// Detect window and conversation.
 	windowId := detectWindowID()
 	convId := extractConversationUUID(transcriptPath)

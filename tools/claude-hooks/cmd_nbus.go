@@ -1155,6 +1155,17 @@ func cmdNbusSessionEnd() {
 	env["end_reason"] = in.EndReason
 	env["turn_count"] = in.TurnCount
 	publishNbusEnvelope(chanSessionEnd, env, can)
+
+	// Registry hygiene (see cmd_session_registry.go). Skipped for
+	// reason=="clear": the process continues running under a freshly
+	// rotated session_id, so its registry file isn't actually ending —
+	// CC (or session-init's stale-sessionId repair, for older CC builds)
+	// handles that rewrite on the next SessionStart instead.
+	if in.EndReason == "clear" {
+		return
+	}
+	srTombstoneEndedSession(srSessionsDir(), in.SessionID, in.EndReason, os.Getpid(), time.Now())
+	srResetPaneTitle()
 }
 
 // cmdNbusSubagentLifecycle handles SubagentStart and SubagentStop.
