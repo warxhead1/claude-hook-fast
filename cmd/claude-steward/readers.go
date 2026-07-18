@@ -85,12 +85,20 @@ type readerPaths struct {
 	// unix-seconds int: the last time the steward compacted it.
 	// Default: $HOME/.claude/steward/last-compact
 	LastCompactDir string
+	// CompletionCache is the persisted subagent-completion cursor state (see
+	// completion.go). Empty disables persistence (in-memory only).
+	// Default: $HOME/.claude/steward/completions.json
+	CompletionCache string
 }
 
 // fileReader is the concrete steward.Reader that reads all of the above from
-// disk on every Read call. It holds no state between ticks.
+// disk on every Read call. Its only cross-tick state is the completion tracker
+// (see completion.go): a pure, disk-rebuildable cache of which subagents have
+// finished, so a completed subagent's lingering transcript is not mistaken for
+// a still-running one. Every other field is derived fresh each tick.
 type fileReader struct {
-	paths readerPaths
+	paths      readerPaths
+	completion *completionTracker
 }
 
 // newFileReader returns a fileReader with any zero-valued path in p defaulted
@@ -130,7 +138,10 @@ func newFileReader(p readerPaths) *fileReader {
 	if p.LastCompactDir == "" {
 		p.LastCompactDir = filepath.Join(home, ".claude", "steward", "last-compact")
 	}
-	return &fileReader{paths: p}
+	if p.CompletionCache == "" {
+		p.CompletionCache = filepath.Join(home, ".claude", "steward", "completions.json")
+	}
+	return &fileReader{paths: p, completion: newCompletionTracker(p.CompletionCache)}
 }
 
 // Read implements steward.Reader. It never returns a partial-but-fatal error
@@ -188,9 +199,12 @@ func (r *fileReader) Read(ctx context.Context, now time.Time, prev steward.Level
 		sess.Ignored = rdPathExists(filepath.Join(r.paths.IgnoreDir, sess.ID))
 		sess.LastCompact = rdReadLastCompact(r.paths.LastCompactDir, sess.ID)
 
-		subs := rdFindSubagents(r.paths.ProjectsDir, sess.ID, now)
+		subs := rdFindSubagents(r.paths.ProjectsDir, sess.ID, now, r.completion)
 		for _, sub := range subs {
-			if sub.StaleFor < cfg.LingeringSubagentAfter {
+			// A completed subagent is never "active" no matter how its
+			// transcript's mtime looks; only a not-yet-stopped, recently-active
+			// child counts toward the compaction-blocking active tally.
+			if !sub.Stopped && sub.StaleFor < cfg.LingeringSubagentAfter {
 				sess.SubagentsActive++
 			}
 		}
@@ -198,6 +212,11 @@ func (r *fileReader) Read(ctx context.Context, now time.Time, prev steward.Level
 
 		snap.Sessions = append(snap.Sessions, sess)
 	}
+
+	// Persist any advanced transcript cursors so the next tick (or a restart /
+	// --once run) resumes incrementally instead of re-scanning from the top. A
+	// failed save is non-fatal — it only costs one cold rescan next time.
+	_ = r.completion.save()
 
 	return snap, nil
 }
@@ -424,20 +443,28 @@ func rdReadRoster(path string) map[string]rdRosterWorker {
 
 // --- lingering subagents -------------------------------------------------------
 
-// rdSubagentMeta optionally supplements a subagent's display name.
+// rdSubagentMeta mirrors the fields of a subagent's sibling <id>.meta.json that
+// the steward consumes: the display name and the toolUseId that ties a
+// dispatched Task/Agent subagent to its completing tool_result in the parent
+// transcript. In-process teammates carry no toolUseId.
 type rdSubagentMeta struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	ToolUseID string `json:"toolUseId"`
 }
 
 // rdFindSubagents globs <ProjectsDir>/*/<sessionID>/subagents/agent-*.jsonl
 // (the glob avoids recomputing the cwd->slug transform) and builds one
 // steward.SubagentState per transcript file found.
 //
-// Started/Stopped is best-effort from file presence alone: a transcript file
-// existing means the subagent was started; there is no lifecycle-end signal
-// available from disk, so Stopped is always false pending SubagentStart/Stop
-// bus-event integration (see task doc).
-func rdFindSubagents(projectsDir, sessionID string, now time.Time) []steward.SubagentState {
+// Started is true for any transcript on disk. Stopped is resolved from the
+// authoritative completion signal: a dispatched subagent's meta.json carries a
+// toolUseId, and its completion is recorded in the PARENT session transcript
+// (<slug>/<sessionID>.jsonl) as a tool_result bearing that id. The tracker
+// scans that transcript incrementally. A subagent with no toolUseId (an
+// in-process teammate) or one whose completion the parent transcript does not
+// yet confirm stays Stopped:false, so mtime staleness alone decides whether it
+// is lingering — the prior behavior, now the fallback rather than the rule.
+func rdFindSubagents(projectsDir, sessionID string, now time.Time, tracker *completionTracker) []steward.SubagentState {
 	pattern := filepath.Join(projectsDir, "*", sessionID, "subagents", "agent-*.jsonl")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -452,33 +479,48 @@ func rdFindSubagents(projectsDir, sessionID string, now time.Time) []steward.Sub
 		base := filepath.Base(m)
 		id := strings.TrimSuffix(base, ".jsonl")
 
-		name := rdSubagentName(m, id)
+		name, toolUseID := rdReadSubagentMeta(m, id)
+
+		stopped := false
+		if toolUseID != "" && tracker != nil {
+			// The subagents/ dir sits directly under the parent session dir;
+			// the parent transcript is that dir plus ".jsonl".
+			sessionDir := filepath.Dir(filepath.Dir(m))
+			stopped = tracker.completed(sessionDir+".jsonl", toolUseID)
+		}
 
 		out = append(out, steward.SubagentState{
 			ID:       id,
 			ParentID: sessionID,
 			Name:     name,
 			Started:  true,
-			Stopped:  false,
+			Stopped:  stopped,
 			StaleFor: rdNonNegative(now.Sub(info.ModTime())),
 		})
 	}
 	return out
 }
 
-// rdSubagentName prefers the "name" field of a sibling <id>.meta.json file;
-// falling back to a name derived from the transcript filename itself
-// (stripping the "agent-" prefix used by ID) when no meta file is present or
-// it fails to parse.
-func rdSubagentName(transcriptPath, id string) string {
+// rdReadSubagentMeta reads the sibling <id>.meta.json once, returning the
+// display name (falling back to the transcript-derived id, stripping the
+// "agent-" prefix, when no meta is present or it fails to parse) and the
+// toolUseId that ties this subagent to a tool_result in its parent transcript
+// ("" for teammates and other classes that carry no dispatch tool_use).
+func rdReadSubagentMeta(transcriptPath, id string) (name, toolUseID string) {
+	name = strings.TrimPrefix(id, "agent-")
 	metaPath := strings.TrimSuffix(transcriptPath, ".jsonl") + ".meta.json"
-	if data, err := os.ReadFile(metaPath); err == nil {
-		var meta rdSubagentMeta
-		if err := json.Unmarshal(data, &meta); err == nil && meta.Name != "" {
-			return meta.Name
-		}
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return name, ""
 	}
-	return strings.TrimPrefix(id, "agent-")
+	var meta rdSubagentMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return name, ""
+	}
+	if meta.Name != "" {
+		name = meta.Name
+	}
+	return name, meta.ToolUseID
 }
 
 // --- opt-out / compaction history ----------------------------------------------

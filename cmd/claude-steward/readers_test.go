@@ -444,6 +444,58 @@ func TestFileReader_Read(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "completed subagent is Stopped via parent tool_result and excluded from active + lingering",
+			setup: func(t *testing.T, dir string) readerPaths {
+				sessDir := filepath.Join(dir, "sessions")
+				rdtWriteJSON(t, filepath.Join(sessDir, "a.json"), rdSessionFile{
+					Pid:       os.Getpid(),
+					SessionID: "parent-sess",
+					Status:    "busy",
+				})
+				projectsDir := filepath.Join(dir, "projects")
+				slugDir := filepath.Join(projectsDir, "-home-eric-projects-foo")
+				subDir := filepath.Join(slugDir, "parent-sess", "subagents")
+
+				// A stale transcript for a subagent that DID finish: its meta
+				// carries a toolUseId and the parent transcript records the
+				// matching tool_result. Without the completion signal this 30m
+				// stale record would be reported as lingering (the old bug).
+				done := filepath.Join(subDir, "agent-done.jsonl")
+				rdtWriteFile(t, done, `{}`)
+				rdtWriteFile(t, filepath.Join(subDir, "agent-done.meta.json"),
+					`{"name":"done-worker","toolUseId":"toolu_DONE"}`)
+				if err := os.Chtimes(done, fixedNow.Add(-30*time.Minute), fixedNow.Add(-30*time.Minute)); err != nil {
+					t.Fatalf("Chtimes: %v", err)
+				}
+				rdtWriteFile(t, filepath.Join(slugDir, "parent-sess.jsonl"),
+					`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_DONE","content":"ok"}]}}`+"\n")
+
+				return readerPaths{
+					UsageCache:  filepath.Join(dir, "no-usage.json"),
+					SessionsDir: sessDir,
+					ProjectsDir: projectsDir,
+				}
+			},
+			check: func(t *testing.T, snap steward.Snapshot) {
+				if len(snap.Sessions) != 1 {
+					t.Fatalf("expected 1 session, got %d", len(snap.Sessions))
+				}
+				if got := snap.Sessions[0].SubagentsActive; got != 0 {
+					t.Errorf("SubagentsActive = %d, want 0 (the only subagent completed)", got)
+				}
+				if len(snap.Subagents) != 1 {
+					t.Fatalf("expected 1 subagent record, got %d: %+v", len(snap.Subagents), snap.Subagents)
+				}
+				sub := snap.Subagents[0]
+				if !sub.Stopped {
+					t.Errorf("expected agent-done to be Stopped (parent transcript carries its tool_result)")
+				}
+				if sub.Lingering(cfg.LingeringSubagentAfter) {
+					t.Errorf("a completed subagent must never be Lingering(), even when 30m stale")
+				}
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -463,6 +515,9 @@ func TestFileReader_Read(t *testing.T) {
 			}
 			if paths.LastCompactDir == "" {
 				paths.LastCompactDir = filepath.Join(dir, "last-compact")
+			}
+			if paths.CompletionCache == "" {
+				paths.CompletionCache = filepath.Join(dir, "completions.json")
 			}
 			if paths.ContextRuntimeDir == "" {
 				paths.ContextRuntimeDir = filepath.Join(dir, "runctx")
@@ -490,8 +545,9 @@ func TestFileReader_Read(t *testing.T) {
 func TestFileReader_Read_ContextCanceled(t *testing.T) {
 	dir := t.TempDir()
 	r := newFileReader(readerPaths{
-		UsageCache:  filepath.Join(dir, "no-usage.json"),
-		SessionsDir: filepath.Join(dir, "sessions"),
+		UsageCache:      filepath.Join(dir, "no-usage.json"),
+		SessionsDir:     filepath.Join(dir, "sessions"),
+		CompletionCache: filepath.Join(dir, "completions.json"),
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
