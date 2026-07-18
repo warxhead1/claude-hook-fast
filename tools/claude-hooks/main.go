@@ -93,6 +93,11 @@ func main() {
 		cmdWorktreeWriteGuard()
 	case "dispatch-freeze-guard":
 		cmdDispatchFreezeGuard()
+	// Claim-gate: catches claimed-and-abandoned beads. See cmd_claim_gate.go.
+	case "claim-gate-track":
+		cmdClaimGateTrack()
+	case "claim-gate":
+		cmdClaimGate()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)
