@@ -20,7 +20,9 @@ package nbuspub
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/warxhead1/claude-hook-fast/internal/hooks/hooklog"
@@ -40,12 +42,51 @@ func SourceTag(project string) string {
 	return "/claude-host/" + project
 }
 
-// PublishTimeout bounds the `nervous publish` child process. Matches
-// the legacy bash hook's `timeout 2` so we don't change observable
-// behavior (nervous publish writes to Redis early then continues with
-// zellij-pipe cleanup; 1s kills it mid-cleanup even though the bus
-// already received the entry).
-const PublishTimeout = 2 * time.Second
+// PublishTimeout bounds the `nervous publish` child process. Since the
+// hook hot paths moved to PublishAsync (detached worker), this bounds
+// BACKGROUND delivery, not hook latency — so it can afford headroom.
+// At the old 2s, 159 of 200 recent publishes died `signal: killed`
+// under loomie load (nervous spawns 3-4 python interpreters per event);
+// 5s recovers delivery without any hook ever waiting on it.
+const PublishTimeout = 5 * time.Second
+
+// WorkerSubcommand is the hidden argv[1] both hook binaries register for
+// the detached publish worker spawned by PublishAsync.
+const WorkerSubcommand = "nbus-publish-worker"
+
+// PublishAsync spawns the current binary as a detached worker
+// (`<self> nbus-publish-worker <channel> <source> <payload>`, own
+// session, null stdio) and returns immediately. The hook path pays
+// fork+exec (~5-10ms) instead of the full nervous/redis round-trip,
+// which routinely exceeded the 2s hook budget Codex allows. Falls back
+// to the synchronous Publish only when the re-exec itself fails.
+func PublishAsync(channel, source, payload string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return Publish(channel, source, payload)
+	}
+	// The worker rebuilds its own child env via Publish → childEnv; the
+	// source tag rides argv, already wrapped by the caller's SourceTag.
+	cmd := exec.Command(exe, WorkerSubcommand, channel, source, payload)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		return Publish(channel, source, payload)
+	}
+	return cmd.Process.Release()
+}
+
+// WorkerMain is the detached-worker entry point: a plain bounded
+// synchronous Publish (with hooklog on failure). Both binaries dispatch
+// WorkerSubcommand here.
+func WorkerMain(args []string) {
+	if len(args) != 3 {
+		return
+	}
+	_ = Publish(args[0], args[1], args[2])
+}
 
 // Publish shells out to `nervous publish <channel> <payload>` with
 // the supplied NERVOUS_SOURCE override and a hard timeout. Returns

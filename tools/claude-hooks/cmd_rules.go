@@ -835,17 +835,17 @@ func stripQuotedSpans(s string) string {
 func cmdRules() {
 	// Global bypass: TENGINE_FLOW_GUARD_OFF=1 skips all rule evaluation.
 	if os.Getenv("TENGINE_FLOW_GUARD_OFF") == "1" {
-		os.Exit(0)
+		hookExit(0)
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
 	if err != nil || len(raw) == 0 {
-		os.Exit(0)
+		hookExit(0)
 	}
 
 	var in ruleHookPayload
 	if err := json.Unmarshal(raw, &in); err != nil || in.ToolName == "" {
-		os.Exit(0)
+		hookExit(0)
 	}
 	if in.SessionID == "" {
 		in.SessionID = "unknown"
@@ -853,7 +853,7 @@ func cmdRules() {
 
 	configPaths := rulesConfigPaths(in.CWD)
 	if len(configPaths) == 0 {
-		os.Exit(0)
+		hookExit(0)
 	}
 
 	cmd := in.command()
@@ -863,7 +863,7 @@ func cmdRules() {
 	// on the command being vetted (the hook runs in its own process). Honor the
 	// hatch in the command text so the advertised escape actually works.
 	if strings.Contains(cmd, "TENGINE_FLOW_GUARD_OFF=1") {
-		os.Exit(0)
+		hookExit(0)
 	}
 
 	// command_regex rules describe shell INVOCATIONS. Match against a copy with
@@ -884,7 +884,7 @@ func cmdRules() {
 	for _, fl := range flushes {
 		writeWindow(fl.sd, fl.name, append(fl.entries, now.Unix()))
 	}
-	os.Exit(0)
+	hookExit(0)
 }
 
 // rulesConfigPaths resolves which config layers apply to this invocation:
@@ -1071,7 +1071,7 @@ func evalRulesConfig(configPath string, in *ruleHookPayload, cmd, matchCmd strin
 			if !strings.HasSuffix(msg, "\n") {
 				fmt.Fprintln(os.Stderr)
 			}
-			os.Exit(2)
+			hookExit(2)
 
 		case "warn":
 			// Non-blocking steering nudge: surface the message via the feedback-db

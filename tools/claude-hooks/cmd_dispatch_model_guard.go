@@ -66,7 +66,7 @@ func guardAgentModel(input *hookio.HookInput) {
 
 	fmt.Fprintln(os.Stderr, msg)
 	hooklog.Writef("dispatch-model-guard: BLOCKED Agent/Task (blank model) description=%q", description)
-	os.Exit(2)
+	hookExit(2)
 }
 
 func guardWorkflowModels(input *hookio.HookInput) {
@@ -101,5 +101,5 @@ func guardWorkflowModels(input *hookio.HookInput) {
 
 	fmt.Fprintln(os.Stderr, msg)
 	hooklog.Writef("dispatch-model-guard: BLOCKED Workflow (agent=%d model=%d)", agentCount, modelCount)
-	os.Exit(2)
+	hookExit(2)
 }

@@ -88,8 +88,23 @@ func newCodexHookCmd() *cobra.Command {
 		newCodexHookPulseCmd(),
 		newCodexHookPreToolCmd(),
 		newCodexHookPermissionRequestCmd(),
+		newCodexHookPublishWorkerCmd(),
 	)
 	return cmd
+}
+
+// newCodexHookPublishWorkerCmd registers the detached bus-publish worker
+// spawned by nbuspub.PublishAsync. Hidden — never invoked by Codex.
+func newCodexHookPublishWorkerCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    nbuspub.WorkerSubcommand + " <channel> <source> <payload>",
+		Hidden: true,
+		Args:   cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nbuspub.WorkerMain(args)
+			return nil
+		},
+	}
 }
 
 func readPayload() (*hookPayload, error) {
@@ -219,10 +234,12 @@ func publishEnvelope(channel string, env map[string]any, sourceProject string) {
 	if err != nil {
 		return
 	}
-	// Consolidated onto the same-repo nbuspub.Publish the Claude PostToolUse
-	// path uses: it bounds `nervous publish` at 2s and logs failures via
-	// hooklog, replacing codex's earlier hand-rolled untimed/unlogged copy.
-	_ = nbuspub.Publish(channel, nbuspub.SourceTag(sourceProject), string(body))
+	// Detached publish worker (nbuspub.PublishAsync): Codex bounds these
+	// hooks at 2s, and the synchronous nervous round-trip (3-4 python
+	// spawns + redis) routinely exceeded that under load — every tool
+	// call surfaced "hook timed out after 2s". The hook now pays only
+	// fork+exec; the worker keeps the bounded publish + hooklog.
+	_ = nbuspub.PublishAsync(channel, nbuspub.SourceTag(sourceProject), string(body))
 }
 
 func newCodexHookSessionStartCmd() *cobra.Command {

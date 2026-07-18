@@ -116,8 +116,8 @@ func baseEnvelope(in event.HookInput, eventName, agentKind string) (map[string]a
 }
 
 // publishNbusEnvelope drops empty values (mirrors the bash
-// `with_entries(select(.value != "" and .value != null))`) and shells
-// out via nervous publish.
+// `with_entries(select(.value != "" and .value != null))`) and hands
+// off to a detached publish worker — the hook never waits on nervous.
 func publishNbusEnvelope(channel string, env map[string]any, sourceProject string) {
 	for k, v := range env {
 		switch vv := v.(type) {
@@ -134,7 +134,7 @@ func publishNbusEnvelope(channel string, env map[string]any, sourceProject strin
 		hooklog.Writef("nbus marshal %s: %v", channel, err)
 		return
 	}
-	_ = nbuspub.Publish(channel, nbuspub.SourceTag(sourceProject), string(body))
+	_ = nbuspub.PublishAsync(channel, nbuspub.SourceTag(sourceProject), string(body))
 }
 
 // cmdNbusActivity replaces zzy-nbus-activity.sh — PostToolUse → bus.agent.activity.v1.
@@ -593,7 +593,7 @@ func emitSessionLifecycleFromInput(in event.HookInput, nbEvent string) {
 // one-pane-one-session invariant, so we suppress it and bind only for a
 // top-level session. (transcript_path already rides baseEnvelope for both.)
 func sessionLifecyclePaneID(in event.HookInput) string {
-	if in.ParentToolUseID != "" {
+	if in.IsSubagent() {
 		return ""
 	}
 	return paneIDForArbiter()

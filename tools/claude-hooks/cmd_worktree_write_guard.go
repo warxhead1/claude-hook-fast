@@ -156,5 +156,5 @@ func cmdWorktreeWriteGuard() {
 	for _, line := range lines {
 		fmt.Fprintln(os.Stderr, line)
 	}
-	os.Exit(2)
+	hookExit(2)
 }

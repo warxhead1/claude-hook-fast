@@ -241,7 +241,7 @@ func cmdDispatchFreezeGuard() {
 				"feedback_agent_absolute_path_main_anchoring). Rewrite the brief with\n"+
 				"BARE-RELATIVE paths (crates/foo/bar.rs) — the worktree has the same\n"+
 				"layout. References to .planning/ docs and .md files are allowed.\n")
-		os.Exit(2)
+		hookExit(2)
 	}
 
 	// --- Rule 3: cross-project auto-mint ---
@@ -266,7 +266,7 @@ func cmdDispatchFreezeGuard() {
 						"failed. Mint manually and brief the printed path as the\n"+
 						"agent's working root:  xwt new %s\n",
 					root, filepath.Base(root))
-				os.Exit(2)
+				hookExit(2)
 			}
 			minted[root] = wt
 		}

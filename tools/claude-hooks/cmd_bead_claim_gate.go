@@ -441,6 +441,6 @@ func cmdBeadClaimGate() {
 	default: // 2 — block
 		hooklog.Writef("bead-claim-gate: BLOCK session=%s beads=%v", in.SessionID, st.WarnedIDs)
 		fmt.Fprintln(os.Stderr, message)
-		os.Exit(2)
+		hookExit(2)
 	}
 }

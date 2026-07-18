@@ -4,7 +4,24 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
+
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/nbuspub"
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/timing"
 )
+
+// hookStart/hookCmd feed the invocation-timing ledger. os.Exit skips
+// defers, so guard exit paths route through hookExit instead of os.Exit
+// to keep exit-2 invocations in the timings too.
+var (
+	hookStart = time.Now()
+	hookCmd   string
+)
+
+func hookExit(code int) {
+	timing.Record("claude-hook-fast", hookCmd, time.Since(hookStart))
+	os.Exit(code)
+}
 
 func main() {
 	flag.Parse()
@@ -14,6 +31,7 @@ func main() {
 	}
 
 	subcommand := flag.Arg(0)
+	hookCmd = subcommand
 
 	switch subcommand {
 	case "tmux-preparing":
@@ -105,8 +123,15 @@ func main() {
 		cmdBeadClaimGateTrack()
 	case "bead-claim-gate":
 		cmdBeadClaimGate()
+	// Detached bus-publish worker (spawned by nbuspub.PublishAsync) and
+	// the invocation-latency report. See internal/hooks/timing.
+	case nbuspub.WorkerSubcommand:
+		nbuspub.WorkerMain(flag.Args()[1:])
+	case "timings":
+		cmdTimings()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)
 	}
+	timing.Record("claude-hook-fast", subcommand, time.Since(hookStart))
 }

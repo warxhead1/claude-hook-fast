@@ -101,7 +101,7 @@ func cmdShaderCompileValidator() {
 	fmt.Fprintln(&msg, "\nFix the compile error before continuing.")
 
 	fmt.Fprint(os.Stderr, msg.String())
-	os.Exit(2)
+	hookExit(2)
 }
 
 // reflexarcSlangFixes shells out to the reflex-tengine slang resolver, which maps

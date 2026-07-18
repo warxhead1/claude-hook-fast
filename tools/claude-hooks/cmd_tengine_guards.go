@@ -198,7 +198,7 @@ DO NOT define inline constants for RES_*, WT_*, POOL_*, or GIGA_HEALTH_* values.
 		filepath.Base(ex.filePath), names.String(), vios[0].name, vios[0].name)
 
 	fmt.Fprint(os.Stderr, msg)
-	os.Exit(2) // BLOCKING — Claude must fix
+	hookExit(2) // BLOCKING — Claude must fix
 }
 
 // ---- shader-hardcoded-ids-guard (non-blocking, writes to feedback-db) ----

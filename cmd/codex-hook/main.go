@@ -4,11 +4,21 @@ package main
 
 import (
 	"os"
+	"time"
+
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/timing"
 )
 
 func main() {
+	start := time.Now()
 	cmd := newCodexHookCmd()
-	if err := cmd.Execute(); err != nil {
+	err := cmd.Execute()
+	sub := ""
+	if len(os.Args) > 1 {
+		sub = os.Args[1]
+	}
+	timing.Record("codex-hook", sub, time.Since(start))
+	if err != nil {
 		os.Exit(1)
 	}
 }

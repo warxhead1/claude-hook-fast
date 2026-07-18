@@ -62,7 +62,7 @@ func cmdCleanupTmp() {
 		time.Sleep(10 * time.Millisecond) // let setsid detach before we exit
 	}()
 
-	os.Exit(0)
+	hookExit(0)
 }
 
 func transcriptToConvID(transcriptPath string) string {

@@ -331,7 +331,7 @@ func cmdClaimGate() {
 	if exitCode == 2 {
 		hooklog.Writef("claim-gate: BLOCK session=%s file=%s", in.SessionID, st.LastEditFile)
 		fmt.Fprintln(os.Stderr, message)
-		os.Exit(2)
+		hookExit(2)
 		return
 	}
 	hooklog.Writef("claim-gate: WARN session=%s file=%s", in.SessionID, st.LastEditFile)

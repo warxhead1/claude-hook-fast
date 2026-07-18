@@ -137,7 +137,7 @@ func cmdWorktreeBashGuard() {
 			"always pass. If you have no worktree, STOP and escalate to the lead.\n"+
 			"Lead: lift with `wave-freeze off <repo-root>` — inline in the same\n"+
 			"command works: `wave-freeze off <root> && git merge ...`.\n")
-	os.Exit(2)
+	hookExit(2)
 }
 
 // bashGuardViolations is the pure core: model the command segment by
