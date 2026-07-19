@@ -2,6 +2,7 @@ package hookio
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
 )
@@ -21,7 +22,12 @@ type HookInput struct {
 }
 
 func ReadHookInput() (*HookInput, bool) {
-	data, err := os.ReadFile("/dev/stdin")
+	// Read fd 0 directly. os.ReadFile("/dev/stdin") re-OPENS the fd via
+	// /proc/self/fd/0, which fails with ENXIO when the harness hands hooks
+	// stdin as a socketpair (Node child_process does) — that made every
+	// guard using this helper silently fail-open in production while shell
+	// pipes (manual tests, go test) worked fine.
+	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return nil, false
 	}

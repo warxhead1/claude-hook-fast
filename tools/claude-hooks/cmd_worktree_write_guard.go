@@ -87,7 +87,12 @@ func cmdWorktreeWriteGuard() {
 	target := realpathBest(path)
 	isAgent := strings.Contains(input.TranscriptPath, "/tasks/")
 	verdict, root := writeGuardVerdict(target, input.Cwd, isAgent)
-	detail := fmt.Sprintf("tool=%s target=%s repo=%s", input.ToolName, target, root)
+	// tx in the detail is forensic: a resumed subagent loses the /tasks/
+	// transcript path and classifies as agent=false — when a primary-tree
+	// write looks wrong after the fact, the logged tx is what proves which
+	// session context actually made it.
+	detail := fmt.Sprintf("tool=%s target=%s repo=%s agent=%v tx=%s",
+		input.ToolName, target, root, isAgent, input.TranscriptPath)
 	if verdict == "" {
 		if root != "" {
 			wgLog("write-guard", "ALLOW", detail)
