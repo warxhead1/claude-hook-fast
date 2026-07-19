@@ -25,6 +25,27 @@ func TestExtractConversationID(t *testing.T) {
 	}
 }
 
+func TestIsSubagentTranscript(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		// fresh dispatch: the /tasks/<id>.output symlink form
+		{"/tmp/claude-1000/-home-eric-projects-tengine/S/tasks/a1.output", true},
+		// resumed subagent: harness passes the RESOLVED symlink target —
+		// this is the case that used to fail-open to lead treatment
+		{"/home/eric/.claude/projects/-home-eric-projects-tengine/S/subagents/agent-a1.jsonl", true},
+		// lead session: transcript lives at the project root, no marker dir
+		{"/home/eric/.claude/projects/-home-eric-projects-tengine/839efa25.jsonl", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := IsSubagentTranscript(tt.path); got != tt.want {
+			t.Errorf("IsSubagentTranscript(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
+
 func TestReadHookInputInvalid(t *testing.T) {
 	_, ok := ReadHookInput()
 	if ok {

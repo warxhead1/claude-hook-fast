@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/warxhead1/claude-hook-fast/tools/claude-hooks/internal/hookio"
 )
@@ -85,12 +84,12 @@ func cmdWorktreeWriteGuard() {
 	}
 
 	target := realpathBest(path)
-	isAgent := strings.Contains(input.TranscriptPath, "/tasks/")
+	isAgent := hookio.IsSubagentTranscript(input.TranscriptPath)
 	verdict, root := writeGuardVerdict(target, input.Cwd, isAgent)
-	// tx in the detail is forensic: a resumed subagent loses the /tasks/
-	// transcript path and classifies as agent=false — when a primary-tree
-	// write looks wrong after the fact, the logged tx is what proves which
-	// session context actually made it.
+	// tx in the detail is forensic: isAgent now catches both the /tasks/
+	// (fresh) and /subagents/ (resumed) transcript forms, but if a future
+	// harness path shape slips past IsSubagentTranscript, the logged tx is
+	// what proves which session context actually made a primary-tree write.
 	detail := fmt.Sprintf("tool=%s target=%s repo=%s agent=%v tx=%s",
 		input.ToolName, target, root, isAgent, input.TranscriptPath)
 	if verdict == "" {

@@ -110,7 +110,7 @@ func cmdWorktreeBashGuard() {
 	if err := json.Unmarshal(input.ToolInput, &ti); err != nil || ti.Command == "" {
 		return
 	}
-	isAgent := strings.Contains(input.TranscriptPath, "/tasks/")
+	isAgent := hookio.IsSubagentTranscript(input.TranscriptPath)
 
 	violations := bashGuardViolations(ti.Command, input.Cwd, isAgent)
 	if len(violations) == 0 {

@@ -41,6 +41,19 @@ func ReadHookInput() (*HookInput, bool) {
 	return &input, true
 }
 
+// IsSubagentTranscript reports whether a transcript_path belongs to a
+// dispatched subagent rather than a top-level (lead) session. Fresh dispatches
+// arrive as the `/tasks/<id>.output` symlink; on RESUME the harness passes the
+// resolved real target `.../<session>/subagents/agent-<id>.jsonl`, which
+// contains neither `/tasks/`. Matching only `/tasks/` therefore fail-OPENs a
+// resumed subagent to lead treatment (it could write the shared main tree).
+// Both markers are positive, durable signals — the lead's own transcript lives
+// at the project root as `<session-uuid>.jsonl`, never under `subagents/`.
+func IsSubagentTranscript(transcriptPath string) bool {
+	return strings.Contains(transcriptPath, "/tasks/") ||
+		strings.Contains(transcriptPath, "/subagents/")
+}
+
 func ExtractConversationID(transcriptPath string) string {
 	if transcriptPath == "" {
 		return ""
