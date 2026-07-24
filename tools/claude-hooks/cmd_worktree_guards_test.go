@@ -47,6 +47,10 @@ func newWgFixture(t *testing.T) *wgFixture {
 		}
 	}
 	mustWrite(t, filepath.Join(f.primary, "code.rs"), "fn main() {}\n")
+	// Real repos always have .git/HEAD; repoOf requires it (a stray empty
+	// .git dir must not read as a repo).
+	mustWrite(t, filepath.Join(f.primary, ".git", "HEAD"), "ref: refs/heads/main\n")
+	mustWrite(t, filepath.Join(f.clone, ".git", "HEAD"), "ref: refs/heads/main\n")
 	mustWrite(t, filepath.Join(f.wt1, ".git"),
 		"gitdir: "+f.primary+"/.git/worktrees/wt1\n")
 	// Resolve symlinks once so expectations match guard-side realpaths.
@@ -272,6 +276,39 @@ func TestShellSplitAndExpand(t *testing.T) {
 	}
 	if _, ok := expandTok("$(date)/f", vars); ok {
 		t.Error("expandTok command substitution should fail")
+	}
+}
+
+func TestRepoOfIgnoresInvalidGitDir(t *testing.T) {
+	f := newWgFixture(t)
+	// A stray EMPTY .git dir (the /tmp/.git incident, 2026-07-21) must not
+	// make its parent a phantom primary checkout.
+	stray := filepath.Join(f.scratch, "straydir")
+	if err := os.MkdirAll(filepath.Join(stray, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if root, kind := repoOf(filepath.Join(stray, "x.log")); kind != "" {
+		t.Errorf("repoOf(under empty .git): got (%q,%q), want not-a-repo", root, kind)
+	}
+	// A valid .git dir (with HEAD) still reads as primary.
+	if root, kind := repoOf(filepath.Join(f.primary, "code.rs")); kind != "primary" || root != f.primary {
+		t.Errorf("repoOf(primary): got (%q,%q), want (%q,primary)", root, kind, f.primary)
+	}
+}
+
+func TestIsEphemeralExactRoot(t *testing.T) {
+	t.Setenv("WORKTREE_GUARD_STRICT_TMP", "")
+	for _, root := range []string{"/tmp", "/tmp/scratch-clone", "/var/tmp", "/dev/shm/x"} {
+		if !isEphemeral(root) {
+			t.Errorf("isEphemeral(%q) = false, want true", root)
+		}
+	}
+	if isEphemeral("/home/u/projects/kb") {
+		t.Error("isEphemeral(real project root) = true, want false")
+	}
+	t.Setenv("WORKTREE_GUARD_STRICT_TMP", "1")
+	if isEphemeral("/tmp/scratch-clone") {
+		t.Error("isEphemeral under STRICT_TMP=1 must be false")
 	}
 }
 

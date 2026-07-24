@@ -16,8 +16,14 @@ func TestIsGitRepo(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if isGitRepo(repo) {
+		t.Error("expected false for an empty .git dir (phantom repo, no HEAD)")
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if !isGitRepo(repo) {
-		t.Error("expected true when cwd itself has a .git dir")
+		t.Error("expected true when cwd itself has a valid .git dir")
 	}
 
 	nested := filepath.Join(repo, "crates", "hearth-api", "src")
@@ -58,6 +64,9 @@ func TestCheckAgentNoIsolation(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	nonGit := filepath.Join(tmp, "not-a-repo")
 	if err := os.MkdirAll(nonGit, 0o755); err != nil {
 		t.Fatal(err)
@@ -96,6 +105,9 @@ func TestCheckWorkflowPartialIsolation(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "hearth")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

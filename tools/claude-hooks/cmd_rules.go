@@ -482,24 +482,15 @@ var (
 
 // ── built-in condition: agent_no_isolation ───────────────────────────────────
 
-// isGitRepo walks up from dir looking for a .git entry (directory or file,
-// so it matches both regular repos and worktree checkouts).
+// isGitRepo reports whether dir is inside a git checkout (regular repo or
+// worktree). Delegates to repoOf — the one canonical walker — which also
+// rejects phantom repos from stray empty .git dirs (the /tmp/.git incident).
 func isGitRepo(dir string) bool {
 	if dir == "" {
 		return false
 	}
-	d := filepath.Clean(dir)
-	for i := 0; i < 30; i++ {
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return true
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return false
-		}
-		d = parent
-	}
-	return false
+	_, kind := repoOf(dir)
+	return kind != ""
 }
 
 // alreadyIsolatedCWD reports whether cwd is already inside a Claude-managed

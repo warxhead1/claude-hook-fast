@@ -80,15 +80,23 @@ func realpathBest(p string) string {
 
 // repoOf walks up from path to the nearest .git entry.
 // kind is "primary", "worktree", or "" (not inside a repo).
+// A .git DIRECTORY only counts as a repo when it contains HEAD (git's own
+// minimum) — a stray empty .git dir (observed: /tmp/.git, 2026-07-21) must
+// not turn its parent into a phantom "primary checkout".
 func repoOf(path string) (root, kind string) {
 	p := realpathBest(path)
 	for {
-		fi, err := os.Stat(filepath.Join(p, ".git"))
+		gp := filepath.Join(p, ".git")
+		fi, err := os.Stat(gp)
 		if err == nil {
 			if fi.IsDir() {
-				return p, "primary"
+				if _, err := os.Stat(filepath.Join(gp, "HEAD")); err == nil {
+					return p, "primary"
+				}
+				// invalid/empty .git dir: not a repo boundary, keep walking
+			} else {
+				return p, "worktree"
 			}
-			return p, "worktree"
 		}
 		parent := filepath.Dir(p)
 		if parent == p {
@@ -140,7 +148,7 @@ func isEphemeral(root string) bool {
 		return false
 	}
 	for _, pre := range wgEphemeralPrefixes {
-		if strings.HasPrefix(root, pre) {
+		if strings.HasPrefix(root, pre) || root == strings.TrimSuffix(pre, "/") {
 			return true
 		}
 	}

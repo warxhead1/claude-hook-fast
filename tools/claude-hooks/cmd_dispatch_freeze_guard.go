@@ -192,6 +192,9 @@ func cmdDispatchFreezeGuard() {
 		if kind == "" {
 			continue // not a repo: fine
 		}
+		if isEphemeral(root) {
+			continue // scratch clone under /tmp etc. — exempt, same as bash/write guards
+		}
 		if kind == "worktree" {
 			if pr, ok := worktreePrimary(root); ok {
 				worktreeTargets[pr] = true // the sanctioned pattern — freeze it

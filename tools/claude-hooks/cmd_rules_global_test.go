@@ -78,6 +78,9 @@ func TestCheckAgentNoIsolationReadOnlyExemption(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name string
