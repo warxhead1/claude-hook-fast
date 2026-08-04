@@ -103,6 +103,8 @@ func main() {
 		cmdMemoryStaleness()
 	case "kb-prime-siblings":
 		cmdKbPrimeSiblings()
+	case "kb-inbox-capture":
+		cmdKbInboxCapture()
 	// Worktree-isolation guard family (ports of the retired
 	// ~/.claude/hooks/pre-tool-use/*.py one-offs; see worktree_common.go).
 	case "worktree-bash-guard":

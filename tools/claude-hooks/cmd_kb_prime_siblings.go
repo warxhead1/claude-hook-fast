@@ -377,6 +377,16 @@ func cmdKbPrimeSiblings() {
 	if section := kpsRenderSiblingSection(headlines, siblings); section != "" {
 		combined = combined + "\n\n" + section
 	}
+	// Live Activity is a separate, tighter-gated, read-only tier — see
+	// cmd_kb_prime_siblings_live.go's doc comment. Sourced from
+	// debug.jsonl directly (no subprocess), so it's cheap enough to run
+	// synchronously here rather than joining the kb-shellout wait group.
+	if len(siblings) > 0 {
+		facts := kplaLiveActivity(siblings, time.Now())
+		if section := kplaRenderLiveSection(facts, siblings); section != "" {
+			combined = combined + "\n\n" + section
+		}
+	}
 
 	out := map[string]any{
 		"hookSpecificOutput": map[string]any{
