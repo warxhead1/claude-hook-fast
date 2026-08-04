@@ -285,6 +285,48 @@ func kpsRunOwnPrime(ctx context.Context, binary, proj, cwd string) string {
 	return strings.TrimRight(buf.String(), "\n")
 }
 
+// kpsTmuxSessionNames mirrors the hardcoded project->tmux-session-name table
+// in hearth's tmux_discovery.rs (derive_tmux_session_name). That function is
+// a static match on project basename, not derived from any live state, so
+// there is nothing to discover here — but a hearth session was observed
+// spending 368 Bash calls in one transcript re-deriving this exact table via
+// `tmux list-sessions`/`zellij list-sessions` and grepping hearth's own
+// source for it. Surfacing it as a fact in the SessionStart digest turns
+// that into a zero-cost lookup. If hearth adds a project to its match table,
+// this drifts silently (stale, not wrong) until someone updates both places
+// — acceptable since the fallback (agent falls back to discovering it live)
+// is exactly what happens today for every project.
+var kpsTmuxSessionNames = map[string]string{
+	"home-automation":  "cc-ha-claude",
+	"hearth-loom":      "cc-hl-claude",
+	"hearth":           "cc-hl-claude",
+	"nervous-bus":      "cc-nb-claude",
+	"deer-flow":        "cc-df-claude",
+	"tengine":          "cc-tengine-claude",
+	"tachyonac-engine": "cc-tx-claude",
+	"kb":               "cc-kb",
+}
+
+// kpsRenderPanesSection lists the tmux/zellij pane each currently-live
+// sibling runs under, straight from kpsTmuxSessionNames. Scoped to `order`
+// (the live-detected siblings from kpsSiblingProjects), not every known
+// project — a pane name for a project with no active session isn't
+// actionable. Deliberately independent of whether kb has any headline for
+// that sibling: the whole point is to answer "which pane is X in" without
+// requiring kb content to exist first.
+func kpsRenderPanesSection(order []string) string {
+	var lines []string
+	for _, p := range order {
+		if tmux, ok := kpsTmuxSessionNames[p]; ok {
+			lines = append(lines, fmt.Sprintf("- **%s**: %s", p, tmux))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "## Sibling Panes\n" + strings.Join(lines, "\n")
+}
+
 // kpsRenderSiblingSection builds the "## Sibling Activity" block from
 // headline-per-project pairs, skipping projects with no headline and
 // enforcing both the per-title cap and the total section byte cap.
@@ -375,6 +417,9 @@ func cmdKbPrimeSiblings() {
 
 	combined := ownOutput
 	if section := kpsRenderSiblingSection(headlines, siblings); section != "" {
+		combined = combined + "\n\n" + section
+	}
+	if section := kpsRenderPanesSection(siblings); section != "" {
 		combined = combined + "\n\n" + section
 	}
 	// Live Activity is a separate, tighter-gated, read-only tier — see
