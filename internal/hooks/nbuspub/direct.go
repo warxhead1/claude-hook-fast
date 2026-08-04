@@ -128,17 +128,31 @@ func redisAddr() (string, error) {
 	return host, nil
 }
 
+// dialTimeout and connDeadline bound the worst-case stall of a single
+// detached worker. Each worker dials exactly once and publishes exactly
+// once (see WorkerMain), so pooling a connection across publishes buys
+// nothing — the fix is failing fast instead of sitting near a long
+// deadline. Under loomie burst load, many workers dial concurrently and
+// Redis's single-threaded event loop can briefly saturate; a stuck
+// worker should give up quickly rather than eating multiple seconds,
+// since debug.jsonl already has the durable copy and the mirror replays
+// it (see PublishDirect's fail-soft contract above).
+const (
+	dialTimeout  = 500 * time.Millisecond
+	connDeadline = time.Second
+)
+
 func redisDeliver(env envelope, raw []byte) error {
 	addr, err := redisAddr()
 	if err != nil {
 		return err
 	}
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(connDeadline))
 	r := bufio.NewReader(conn)
 
 	// Idempotent claim, matching nervous: nil-reply = already delivered

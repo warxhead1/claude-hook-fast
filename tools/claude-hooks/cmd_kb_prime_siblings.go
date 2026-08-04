@@ -99,8 +99,12 @@ type kpsPrimeEntry struct {
 }
 
 // kpsPrimeResult is the subset of `kb prime --json` output this hook
-// consumes to pick a single best headline per sibling project.
+// consumes to pick a single best headline per sibling project. Project
+// is only populated by `kb prime --projects a,b,c --json` (a JSON array
+// of these, one per requested project); the single-project `--project`
+// form omits it since the caller already knows which project it asked for.
 type kpsPrimeResult struct {
+	Project     string          `json:"project"`
 	Recent      []kpsPrimeEntry `json:"recent"`
 	ActivePlans []kpsPrimeEntry `json:"active_plans"`
 	Gaps        []kpsPrimeEntry `json:"gaps"`
@@ -221,22 +225,46 @@ func kpsSiblingProjects(ownProject string) []string {
 	return out
 }
 
-// kpsRunKbPrimeJSON shells out `kb prime --project <p> --limit 1 --json`
-// and returns the parsed result. Bounded by ctx; all errors (spawn
-// failure, non-zero exit, malformed JSON) yield a zero result.
-func kpsRunKbPrimeJSON(ctx context.Context, binary, proj string) kpsPrimeResult {
-	cmd := osexec.CommandContext(ctx, binary, "prime", "--project", proj, "--limit", "1", "--json") //nolint:gosec
+// kpsRunKbPrimeBatch shells out ONE `kb prime --projects a,b,c --json` call
+// covering all siblings at once and returns a project -> result map.
+//
+// The naive approach — one `kb prime --project X --json` per sibling,
+// run concurrently — still means N processes each doing a full vault
+// walk + YAML parse over every entry, all competing for disk/page-cache
+// at once. That's the measured 3.7s p95 tail under load. `kb prime
+// --projects` (added specifically for this caller) does the walk once
+// and buckets matching entries per project, so cost is O(vault) instead
+// of O(vault × siblings) regardless of how many siblings are live.
+func kpsRunKbPrimeBatch(ctx context.Context, binary string, projs []string) map[string]kpsPrimeResult {
+	out := make(map[string]kpsPrimeResult, len(projs))
+	if len(projs) == 0 {
+		return out
+	}
+	cmd := osexec.CommandContext(ctx, binary, "prime", "--projects", strings.Join(projs, ","), "--limit", "1", "--json") //nolint:gosec
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
-		return kpsPrimeResult{}
+		return out
 	}
-	var res kpsPrimeResult
-	if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
-		return kpsPrimeResult{}
+	var results []kpsPrimeResult
+	if err := json.Unmarshal(buf.Bytes(), &results); err != nil {
+		return out
 	}
-	return res
+	// kb prime --projects returns results in the same order as the
+	// --projects argument, but key by result.Project (not slice index)
+	// so a mismatch fails safe (missing headline) instead of mislabeling.
+	for i, r := range results {
+		key := r.Project
+		if key == "" && i < len(projs) {
+			key = projs[i]
+		}
+		if key == "" {
+			continue
+		}
+		out[key] = r
+	}
+	return out
 }
 
 // kpsRunOwnPrime shells out `kb prime --project <p> --limit 3` (plain
@@ -323,17 +351,17 @@ func cmdKbPrimeSiblings() {
 		mu.Unlock()
 	}()
 
-	for _, sib := range siblings {
-		sib := sib
+	if len(siblings) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			callCtx, callCancel := context.WithTimeout(ctx, kpsPerCallTimeout)
 			defer callCancel()
-			res := kpsRunKbPrimeJSON(callCtx, binary, sib)
-			h := res.headline()
+			results := kpsRunKbPrimeBatch(callCtx, binary, siblings)
 			mu.Lock()
-			headlines[sib] = h
+			for _, sib := range siblings {
+				headlines[sib] = results[sib].headline()
+			}
 			mu.Unlock()
 		}()
 	}

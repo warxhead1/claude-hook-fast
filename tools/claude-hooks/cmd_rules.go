@@ -93,6 +93,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -153,7 +154,7 @@ type whenCfg struct {
 }
 
 type actionCfg struct {
-	Type     string `json:"type"`     // "block"|"warn"|"log"|"emit"|"reset"
+	Type     string `json:"type"` // "block"|"warn"|"log"|"emit"|"reset"
 	Message  string `json:"message"`
 	Pipeline string `json:"pipeline"` // for log/emit
 	Counter  string `json:"counter"`  // for reset
@@ -378,20 +379,35 @@ func mainRootFor(projectDir string) string {
 	return projectDir
 }
 
+// checkCargoNoRustEditsTimeout bounds the git status call below. This is the
+// only subprocess call on the "rules" PreToolUse hot path (fires on every
+// tool call across every worktree cwd) — every other exec.Command in this
+// repo uses exec.CommandContext per convention (see cmd_session_registry.go),
+// but this one didn't, and a `git status` can hang indefinitely on a
+// contended index.lock under heavy concurrent multi-agent/worktree load.
+// An unbounded hang here blocks the tool call itself, not just Stop — unlike
+// the Node hooks under timeout-wrapper.sh, there is no SIGKILL-swallow net
+// on this path, so a stuck git call can abort the turn (tachyonac-engine,
+// 2026-08-03).
+const checkCargoNoRustEditsTimeout = 2 * time.Second
+
 // checkCargoNoRustEdits returns true (condition holds → should block) when the
 // cwd is inside a tengine worktree AND git status shows no Rust/C/TOML edits.
-// Git failure (e.g. directory doesn't exist) is treated as "no edits" →
-// block, matching the bash flow-guard.sh behavior (git pipe to wc -l returns 0).
+// Git failure (e.g. directory doesn't exist, or the call timed out) is
+// treated as "no edits" → block, matching the bash flow-guard.sh behavior
+// (git pipe to wc -l returns 0).
 func checkCargoNoRustEdits(cwd, projectDir string) bool {
 	root := mainRootFor(projectDir)
 	wtBase := filepath.Join(root, ".claude", "worktrees")
 	if !strings.HasPrefix(cwd, wtBase) {
 		return false // not in a worktree → condition does not hold
 	}
-	out, err := exec.Command("git", "-C", cwd, "status", "--porcelain").Output() //nolint:gosec
+	ctx, cancel := context.WithTimeout(context.Background(), checkCargoNoRustEditsTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", cwd, "status", "--porcelain").Output() //nolint:gosec
 	if err != nil {
-		// git failure → no edits visible → should block (matches bash behavior:
-		// wc -l of empty pipe = 0 → wt_modified == 0 → block)
+		// git failure (including timeout) → no edits visible → should block
+		// (matches bash behavior: wc -l of empty pipe = 0 → wt_modified == 0 → block)
 		return true
 	}
 	for _, line := range strings.Split(string(out), "\n") {
@@ -417,8 +433,8 @@ func checkCargoNoRustEdits(cwd, projectDir string) bool {
 // ── built-in condition: bash_write_guard ─────────────────────────────────────
 
 // checkBashWriteGuard returns true (should block) when:
-//  - cwd is inside a tengine worktree
-//  - the command writes to a path under mainRoot that is NOT itself a worktree
+//   - cwd is inside a tengine worktree
+//   - the command writes to a path under mainRoot that is NOT itself a worktree
 //
 // Mirrors detector (e) in flow-guard.sh.
 func checkBashWriteGuard(cmd, cwd, projectDir string) bool {
