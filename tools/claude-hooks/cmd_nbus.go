@@ -1119,7 +1119,11 @@ func cmdNbusPermissionRequest() {
 // authoritative real-time source for session last output. Replaces JSONL
 // polling for last_output on phone/watch.
 func cmdNbusMessageDisplay() {
-	in, _ := readStdinForHook()
+	in, raw := readStdinForHook()
+	// Temporary (2026-08-05): real MessageDisplay events parse to
+	// msg_chars=0, so the payload schema differs from our struct tags.
+	// Capture the raw head until the true field names are confirmed.
+	traceNote("raw_head", truncate(string(raw), 300))
 	// Evidence trail for the message-drop investigation (2026-08-05): record
 	// every message the client delivers to the hook layer, including the
 	// ones we skip, so a vanished assistant message can be located — traced
