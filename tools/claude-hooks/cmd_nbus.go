@@ -1120,6 +1120,15 @@ func cmdNbusPermissionRequest() {
 // polling for last_output on phone/watch.
 func cmdNbusMessageDisplay() {
 	in, _ := readStdinForHook()
+	// Evidence trail for the message-drop investigation (2026-08-05): record
+	// every message the client delivers to the hook layer, including the
+	// ones we skip, so a vanished assistant message can be located — traced
+	// here means the client had it at display time; absent means it was
+	// dropped before any hook ran.
+	traceNote("session", in.SessionID)
+	traceNote("is_partial", in.IsPartial)
+	traceNote("msg_chars", len(in.MessageText))
+	traceNote("msg_preview", truncate(in.MessageText, 200))
 	if in.SessionID == "" || in.IsPartial || in.MessageText == "" {
 		return
 	}

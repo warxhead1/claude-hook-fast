@@ -20,6 +20,7 @@ var (
 
 func hookExit(code int) {
 	timing.Record("claude-hook-fast", hookCmd, time.Since(hookStart))
+	traceFinish(code)
 	os.Exit(code)
 }
 
@@ -32,6 +33,7 @@ func main() {
 
 	subcommand := flag.Arg(0)
 	hookCmd = subcommand
+	traceInit(subcommand)
 
 	switch subcommand {
 	case "tmux-preparing":
@@ -136,4 +138,5 @@ func main() {
 		os.Exit(2)
 	}
 	timing.Record("claude-hook-fast", subcommand, time.Since(hookStart))
+	traceFinish(0)
 }
