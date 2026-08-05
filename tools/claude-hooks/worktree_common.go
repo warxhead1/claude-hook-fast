@@ -332,3 +332,75 @@ func resolvePath(tok, cwd string, vars map[string]*string, mustExist bool) strin
 	}
 	return ""
 }
+
+// splitShellSegments splits a shell command into segments on the unquoted
+// separators `&&`, `||`, `;`, and newline — the same delimiter set the old
+// segSplitRe regex used, minus its defect: the regex split the RAW string,
+// blind to quoting, so a multi-line single- or double-quoted argument (SQL
+// piped to psql was the measured case, 2026-08-05: `echo "... WHERE
+// consecutive_failures > 0" | db-readonly.sh`) was chopped mid-string and a
+// bare `> 0` inside the quotes parsed as an output redirect to a file named
+// "0", falsely blocking a read-only command. Quote state (single quotes,
+// double quotes with backslash escapes, and backslash escapes outside
+// quotes) is tracked so separators inside quotes never split. Unbalanced
+// quotes fall back to splitting the remainder as the regex would have —
+// the guard family already tolerates unparseable segments by skipping them.
+func splitShellSegments(command string) []string {
+	var segs []string
+	var cur strings.Builder
+	flush := func() {
+		segs = append(segs, cur.String())
+		cur.Reset()
+	}
+	i, n := 0, len(command)
+	inSingle, inDouble := false, false
+	for i < n {
+		c := command[i]
+		switch {
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+			cur.WriteByte(c)
+			i++
+		case inDouble:
+			if c == '\\' && i+1 < n {
+				cur.WriteByte(c)
+				cur.WriteByte(command[i+1])
+				i += 2
+				continue
+			}
+			if c == '"' {
+				inDouble = false
+			}
+			cur.WriteByte(c)
+			i++
+		case c == '\\' && i+1 < n:
+			cur.WriteByte(c)
+			cur.WriteByte(command[i+1])
+			i += 2
+		case c == '\'':
+			inSingle = true
+			cur.WriteByte(c)
+			i++
+		case c == '"':
+			inDouble = true
+			cur.WriteByte(c)
+			i++
+		case c == ';' || c == '\n':
+			flush()
+			i++
+		case c == '&' && i+1 < n && command[i+1] == '&':
+			flush()
+			i += 2
+		case c == '|' && i+1 < n && command[i+1] == '|':
+			flush()
+			i += 2
+		default:
+			cur.WriteByte(c)
+			i++
+		}
+	}
+	flush()
+	return segs
+}

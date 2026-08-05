@@ -86,7 +86,6 @@ var stripTokens = map[string]bool{
 }
 
 var (
-	segSplitRe   = regexp.MustCompile(`&&|\|\||[;\n]`)
 	assignRe     = regexp.MustCompile(`^([A-Za-z_]\w*)=(.*)$`)
 	fusedRedirRe = regexp.MustCompile(`^\d?>{1,2}(.+)$`)
 )
@@ -192,7 +191,7 @@ func bashGuardViolations(command, startCwd string, isAgent bool) []bashViolation
 		}
 	}
 
-	for _, seg := range segSplitRe.Split(command, -1) {
+	for _, seg := range splitShellSegments(command) {
 		seg = strings.TrimSpace(seg)
 		if seg == "" {
 			continue

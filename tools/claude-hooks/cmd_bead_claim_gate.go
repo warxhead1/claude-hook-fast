@@ -119,7 +119,7 @@ func detectBeadClaimEvents(command string) []beadClaimEvent {
 		events = append(events, beadClaimEvent{Kind: beadClaimEventHandback, BeadID: m[1]})
 	}
 
-	for _, seg := range segSplitRe.Split(command, -1) {
+	for _, seg := range splitShellSegments(command) {
 		seg = strings.TrimSpace(seg)
 		if seg == "" {
 			continue
