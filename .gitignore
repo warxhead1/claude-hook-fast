@@ -14,3 +14,4 @@ tools/claude-hooks/claude-hook-fast
 *.swp
 *.swo
 chf.bak
+.claude/worktrees/
