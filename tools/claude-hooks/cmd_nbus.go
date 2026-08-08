@@ -1145,8 +1145,24 @@ func cmdNbusMessageDisplay() {
 }
 
 // cmdNbusStopFailure handles StopFailure — API error at turn end.
+//
+// `error_type` and `error_message` were named on assumption, never against a
+// captured payload. Claude Code's documented StopFailure matcher filters on an
+// error type drawn from a fixed set (rate_limit, overloaded,
+// authentication_failed, oauth_org_not_allowed, billing_error,
+// invalid_request, model_not_found, server_error, max_output_tokens, unknown),
+// but both fields have been arriving empty — publishNbusEnvelope strips empty
+// strings, so the published event carried no error information at all, and
+// hearth-api's consumer substituted its own "unknown"/"" placeholders and
+// pushed those to the phone as if they were the error.
+//
+// Trace the raw payload so the true key names are recoverable from
+// ~/.claude/hooks/log/hook-trace.jsonl instead of guessed at again.
 func cmdNbusStopFailure() {
-	in, _ := readStdinForHook()
+	in, raw := readStdinForHook()
+	traceNote("raw_head", truncate(string(raw), 600))
+	traceNote("parsed_error_type", in.ErrorType)
+	traceNote("parsed_error_message", in.ErrorMessage)
 	if in.SessionID == "" {
 		return
 	}
