@@ -107,6 +107,10 @@ func main() {
 		cmdKbPrimeSiblings()
 	case "kb-inbox-capture":
 		cmdKbInboxCapture()
+	case "kb-dispatch-inject":
+		cmdKbDispatchInject()
+	case "kb-subagent-capture":
+		cmdKbSubagentCapture()
 	// Worktree-isolation guard family (ports of the retired
 	// ~/.claude/hooks/pre-tool-use/*.py one-offs; see worktree_common.go).
 	case "worktree-bash-guard":
