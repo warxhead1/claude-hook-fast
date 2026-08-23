@@ -65,6 +65,13 @@ const (
 	// the whole budget and starve the real call.
 	kdiHelpProbeTimeout = 500 * time.Millisecond
 
+	// kdiWaitDelay bounds exec.Cmd.Wait() after a context-triggered kill
+	// (Cmd.WaitDelay, Go 1.20+): CommandContext only signals the direct
+	// child on ctx expiry, so Wait() can otherwise block indefinitely on
+	// I/O pipes a grandchild process still holds open. Kept short since
+	// it only matters on the already-unhappy timeout path.
+	kdiWaitDelay = 1 * time.Second
+
 	// kdiBlockCapBytes bounds the rendered KB Context block (~2KB per
 	// the mission spec) — belt and suspenders against context bloat on
 	// every single dispatch, not just the sibling-activity case
@@ -96,6 +103,13 @@ func kdiHasBriefVerb(ctx context.Context, binary string) bool {
 	cmd := osexec.CommandContext(probeCtx, binary, "brief", "--help") //nolint:gosec
 	cmd.Stdout = nil
 	cmd.Stderr = nil
+	// WaitDelay bounds Wait() itself: CommandContext only SIGKILLs the
+	// direct child on ctx expiry, but Wait() still blocks until every fd
+	// referencing the (nil here, but see kdiFetchContext) I/O pipes
+	// closes — a grandchild the shell forked (not exec'd/tail-call'd)
+	// can hold that open past the process's own death. WaitDelay forces
+	// Wait() to return kdiWaitDelay after Cancel fires regardless.
+	cmd.WaitDelay = kdiWaitDelay
 	return cmd.Run() == nil
 }
 
@@ -109,6 +123,12 @@ func kdiFetchContext(ctx context.Context, binary, verb, proj string) (kpsPrimeRe
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = nil
+	// See kdiHasBriefVerb's comment: without WaitDelay, Wait() can block
+	// well past ctx's deadline if kb forks a grandchild holding the
+	// stdout pipe open (measured: a killed process whose stdout pipe
+	// stays open via an orphaned child left Wait() blocked for the
+	// grandchild's full remaining lifetime, not the context deadline).
+	cmd.WaitDelay = kdiWaitDelay
 	if err := cmd.Run(); err != nil {
 		return result, false
 	}
