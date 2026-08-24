@@ -26,6 +26,8 @@ import (
 
 const debugLogMaxBytes = 524288000 // mirrors nervous _log_max
 
+var debugLogSync = func(f *os.File) error { return f.Sync() }
+
 type envelope struct {
 	SpecVersion     string          `json:"specversion"`
 	ID              string          `json:"id"`
@@ -41,12 +43,18 @@ type envelope struct {
 // replays it. Returns an error only when the payload is unusable or
 // both durability and delivery failed, so the caller can fall back.
 func PublishDirect(channel, source, payload string) error {
+	return publishDirect(channel, source, payload, true)
+}
+
+// publishDirect can reuse the pre-detach outbox receipt created by
+// PublishAsync. Direct callers still append their own durable receipt.
+func publishDirect(channel, source, payload string, appendReceipt bool) error {
 	if channel == "" || !json.Valid([]byte(payload)) {
 		return fmt.Errorf("nbuspub direct: invalid channel/payload")
 	}
 	env := envelope{
 		SpecVersion:     "1.0",
-		ID:              ulidish(),
+		ID:              semanticEventID(payload),
 		Source:          source,
 		Type:            channel,
 		Time:            time.Now().UTC().Format("2006-01-02T15:04:05Z"),
@@ -57,7 +65,7 @@ func PublishDirect(channel, source, payload string) error {
 	if err != nil {
 		return err
 	}
-	logged := appendDebugLog(raw)
+	logged := !appendReceipt || appendDebugLog(raw)
 	if os.Getenv("NERVOUS_NO_REDIS") == "1" {
 		return nil
 	}
@@ -68,6 +76,18 @@ func PublishDirect(channel, source, payload string) error {
 		return err
 	}
 	return nil
+}
+
+// semanticEventID lets hook producers carry a stable logical id through the
+// CloudEvents/dedup boundary. Other producers retain the sortable random id.
+func semanticEventID(payload string) string {
+	var value struct {
+		EventID string `json:"event_id"`
+	}
+	if json.Unmarshal([]byte(payload), &value) == nil && value.EventID != "" {
+		return value.EventID
+	}
+	return ulidish()
 }
 
 // ulidish mirrors nervous's ulid(): unix-ms timestamp (sortable
@@ -100,7 +120,10 @@ func appendDebugLog(raw []byte) bool {
 	}
 	defer func() { _ = f.Close() }()
 	_, err = f.Write(append(raw, '\n'))
-	return err == nil
+	if err != nil {
+		return false
+	}
+	return debugLogSync(f) == nil
 }
 
 // redisAddr resolves NERVOUS_REDIS_URL (default redis://localhost:6379)

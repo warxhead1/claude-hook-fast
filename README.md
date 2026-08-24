@@ -19,8 +19,23 @@ Subcommands: `tmux-preparing`, `tmux-ready`, `tmux-notification`, `tmux-thinking
 `shader-compile-validator`, `flow`, `rules`
 
 ### `codex-hook` (`cmd/codex-hook/`)
-Hook binary for the Codex CLI. Handles `session-start`, `stop`, and `pulse` events,
-publishing to nervous-bus and notifying the hearth-loom gateway.
+Hook binary for Codex 0.149. It supports `SessionStart`, `Stop` (a `turn_end`,
+not a terminal session), `SessionEnd`, `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact`, `SubagentStart`,
+and `SubagentStop`. Copy [configs/codex-hooks.toml.example](configs/codex-hooks.toml.example)
+into `~/.codex/config.toml`; keep the single absolute binary path in every block.
+
+Codex hook input is fail-open. The producer records the root `session_id`, a
+qualified `tmux:%N` or `zellij:<session>:<pane>` binding, and explicit child
+`agent_id`/`agent_type`; subagents never claim the parent pane. Tool payloads are
+redacted and bounded. A single detached, PID-starttime-validated lease worker
+refreshes the root binding about every 30 seconds and exits on terminal cleanup,
+stale parent, or six minutes without a hook refresh. Direct nbus delivery fsyncs
+a pre-detach debug receipt/backstop before Redis; it is not an acknowledged outbox.
+The six-minute timeout only bounds an idle lease worker; it is not evidence that a
+Codex session ended. The deterministic unit test bounds in-process work, while
+release validation should also use a real subprocess measurement (the current
+50-hook host measurement is about 3.02 ms average including fsync and fork).
 
 ### `hearth-loom-hook` (`cmd/hearth-loom-hook/`)
 In-container HTTP-push observability shim used inside hearth-loom dispatch containers.

@@ -16,7 +16,7 @@ func TestCodexToolSummary(t *testing.T) {
 		want  string
 	}{
 		{"empty input", "", ""},
-		{"description preferred", `{"description":"run the build","command":"cargo build"}`, "run the build"},
+		{"command safely preferred", `{"description":"run the build","command":"cargo build"}`, "cargo build"},
 		{"command fallback", `{"command":"cargo build"}`, "cargo build"},
 		{"raw json when no known field", `{"path":"/etc/hosts"}`, `{"path":"/etc/hosts"}`},
 	}

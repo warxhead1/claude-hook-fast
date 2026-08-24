@@ -1,0 +1,48 @@
+# Copy the hook blocks you need into ~/.codex/config.toml. Use one absolute
+# binary path everywhere so mixed installed/worktree builds cannot emit events.
+# Replace /home/eric/.local/bin/codex-hook only after installing that exact build.
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook session-start"
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook stop"
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook session-end"
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook user-prompt-submit"
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook pre-tool"
+[[hooks.PostToolUse]]
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook post-tool"
+[[hooks.PermissionRequest]]
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook permission-request"
+[[hooks.PreCompact]]
+[[hooks.PreCompact.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook pre-compact"
+[[hooks.PostCompact]]
+[[hooks.PostCompact.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook post-compact"
+[[hooks.SubagentStart]]
+[[hooks.SubagentStart.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook subagent-start"
+[[hooks.SubagentStop]]
+[[hooks.SubagentStop.hooks]]
+type = "command"
+command = "/home/eric/.local/bin/codex-hook subagent-stop"
