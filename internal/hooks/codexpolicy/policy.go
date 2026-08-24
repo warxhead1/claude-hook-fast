@@ -20,13 +20,18 @@ const (
 var assets embed.FS
 
 type WorkerPolicy struct {
-	Version              int      `json:"version"`
-	DefaultModel         string   `json:"default_model"`
-	ReadOnlyModel        string   `json:"read_only_model"`
-	AllowedWorkerModels  []string `json:"allowed_worker_models"`
-	BlockedWorkerModels  []string `json:"blocked_worker_models"`
-	RequireExplicitAgent bool     `json:"require_explicit_agent"`
-	RequireExplicitModel bool     `json:"require_explicit_model"`
+	Version                int                         `json:"version"`
+	DefaultModel           string                      `json:"default_model"`
+	ReadOnlyModel          string                      `json:"read_only_model"`
+	AllowedWorkerModels    []string                    `json:"allowed_worker_models"`
+	RestrictedWorkerModels map[string]ModelRestriction `json:"restricted_worker_models"`
+	RequireExplicitAgent   bool                        `json:"require_explicit_agent"`
+	RequireExplicitModel   bool                        `json:"require_explicit_model"`
+}
+
+type ModelRestriction struct {
+	RequiredEnv   string `json:"required_env"`
+	RequiredValue string `json:"required_value"`
 }
 
 type Violation struct {
@@ -65,13 +70,15 @@ func Parse(data []byte) (WorkerPolicy, error) {
 		return WorkerPolicy{}, errors.New("allowed_worker_models must not be empty")
 	}
 	allowed := stringSet(p.AllowedWorkerModels)
-	blocked := stringSet(p.BlockedWorkerModels)
 	if !allowed[p.DefaultModel] || !allowed[p.ReadOnlyModel] {
 		return WorkerPolicy{}, errors.New("default and read-only models must be allowed")
 	}
-	for model := range blocked {
-		if allowed[model] {
-			return WorkerPolicy{}, fmt.Errorf("model %q is both allowed and blocked", model)
+	for model, restriction := range p.RestrictedWorkerModels {
+		if !allowed[model] {
+			return WorkerPolicy{}, fmt.Errorf("restricted model %q must also be allowed", model)
+		}
+		if strings.TrimSpace(restriction.RequiredEnv) == "" || strings.TrimSpace(restriction.RequiredValue) == "" {
+			return WorkerPolicy{}, fmt.Errorf("restricted model %q requires a non-empty env key and value", model)
 		}
 	}
 	return p, nil
@@ -153,15 +160,20 @@ func InspectCommand(command string, policy WorkerPolicy) []Violation {
 			continue
 		}
 		model := models[0]
-		if stringSet(policy.BlockedWorkerModels)[model] {
-			violations = append(violations, Violation{Model: model, Reason: fmt.Sprintf("Codex worker launch blocked: model %s is reserved for the primary coordinator and may not be dispatched as a worker.", model)})
-			continue
-		}
 		if !stringSet(policy.AllowedWorkerModels)[model] {
 			violations = append(violations, Violation{Model: model, Reason: fmt.Sprintf("Codex worker launch blocked: model %s is not in the host allowlist. Use %s for read-only work or update the versioned policy deliberately.", model, policy.ReadOnlyModel)})
+			continue
+		}
+		if restriction, ok := policy.RestrictedWorkerModels[model]; ok && !hasEnvOptIn(segment, restriction) {
+			violations = append(violations, Violation{Model: model, Reason: fmt.Sprintf("Codex worker launch blocked: model %s requires an explicit %s=%s launch prefix after a concrete exceptional reason is stated.", model, restriction.RequiredEnv, restriction.RequiredValue)})
 		}
 	}
 	return violations
+}
+
+func hasEnvOptIn(command string, restriction ModelRestriction) bool {
+	assignment := regexp.MustCompile(`(?:^|\s)` + regexp.QuoteMeta(restriction.RequiredEnv) + `=(?:"` + regexp.QuoteMeta(restriction.RequiredValue) + `"|'` + regexp.QuoteMeta(restriction.RequiredValue) + `'|` + regexp.QuoteMeta(restriction.RequiredValue) + `)(?:\s|$)`)
+	return assignment.MatchString(command)
 }
 
 func flagValues(command, name string) []string {

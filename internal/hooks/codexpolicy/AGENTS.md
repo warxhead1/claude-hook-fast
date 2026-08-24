@@ -14,17 +14,20 @@ explicitly overrides it. Cost selection is part of correctness.
 - Use Terra only when a bounded task needs more implementation judgment than
   Luna and is not a good mechanical MMX slice.
 - Reserve Sol for the primary coordinator's architecture, high-risk design,
-  adversarial integration review, and genuinely frontier reasoning. Never use
-  Sol for a subagent or parallel worker unless the user explicitly requests it.
-- Subagents inherit this routing rule and must not spawn Sol descendants.
+  adversarial integration review, and genuinely frontier reasoning. A Sol
+  subagent or parallel worker is permitted when the user explicitly requests it
+  or the coordinator states a concrete exceptional reason before launch.
+- Subagents inherit this routing rule and must not spawn Sol descendants by
+  default.
 
 ## Fail-closed launch rules
 
 - Every `orca-ide orchestration worker-start` command must include an explicit
   `--agent`. Every Codex worker must also include exactly one explicit `--model`.
 - Read-only Codex workers use `--model gpt-5.6-luna`.
-- The host hook permits Luna and Terra worker launches and rejects Sol, unknown,
-  missing, or duplicate model selections. Sol work stays in the primary session.
+- The host hook permits Luna and Terra normally. A Sol worker requires both
+  `--model gpt-5.6-sol` and the explicit launch prefix
+  `CODEX_ALLOW_SOL_WORKER=1`; unknown, missing, or duplicate models are denied.
 - Before launching, tell the user the worker count, model, and bounded purpose.
 - Inspect every Orca launch receipt. `launch.requested.model` and
   `launch.effective.model` must both be present and match the intended model.
@@ -51,4 +54,5 @@ explicitly overrides it. Cost selection is part of correctness.
 - Luna discovers and audits.
 - MMX types bounded mechanical changes.
 - Terra handles bounded judgment-heavy implementation when justified.
-- Sol designs, integrates, and reviews in the primary session only.
+- Sol designs, integrates, and reviews in the primary session or a deliberately
+  opted-in exceptional worker.

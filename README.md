@@ -40,8 +40,10 @@ release validation should also use a real subprocess measurement (the current
 `PreToolUse` additionally enforces the versioned worker-model policy in
 [`internal/hooks/codexpolicy/worker-policy.json`](internal/hooks/codexpolicy/worker-policy.json).
 Every Orca worker launch must name its agent; Codex workers must name exactly one
-allowed model. Luna and Terra are allowed, while Sol, unknown models, missing
-models, and duplicate model flags are denied using Codex's native
+allowed model. Luna and Terra are directly allowed. Sol remains available for
+exceptional work but requires the additional explicit launch prefix
+`CODEX_ALLOW_SOL_WORKER=1`. Unknown models, missing models, duplicate model flags,
+and unacknowledged Sol launches are denied using Codex's native
 `permissionDecision: deny` response. A missing installed policy uses the embedded
 restrictive default; a malformed installed policy fails closed.
 

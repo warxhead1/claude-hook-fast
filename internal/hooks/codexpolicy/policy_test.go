@@ -24,7 +24,9 @@ func TestInspectCommand(t *testing.T) {
 	}{
 		{"luna allowed", "orca-ide orchestration worker-start --task t --agent codex --model gpt-5.6-luna --json", false, ""},
 		{"terra allowed", "orca-ide orchestration worker-start --agent=codex --model=gpt-5.6-terra", false, ""},
-		{"sol blocked", "orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol", true, "reserved"},
+		{"sol requires opt in", "orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol", true, "CODEX_ALLOW_SOL_WORKER=1"},
+		{"sol explicitly allowed", "CODEX_ALLOW_SOL_WORKER=1 orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol", false, ""},
+		{"sol env explicitly allowed", "env CODEX_ALLOW_SOL_WORKER='1' orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol", false, ""},
 		{"missing model", "orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
 		{"unknown model", "/home/eric/.local/bin/orca-ide orchestration worker-start --agent codex --model mystery", true, "not in the host allowlist"},
 		{"missing agent", "orca-ide orchestration worker-start --task t", true, "explicit --agent"},
