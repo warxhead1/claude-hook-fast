@@ -37,6 +37,26 @@ Codex session ended. The deterministic unit test bounds in-process work, while
 release validation should also use a real subprocess measurement (the current
 50-hook host measurement is about 3.02 ms average including fsync and fork).
 
+`PreToolUse` additionally enforces the versioned worker-model policy in
+[`internal/hooks/codexpolicy/worker-policy.json`](internal/hooks/codexpolicy/worker-policy.json).
+Every Orca worker launch must name its agent; Codex workers must name exactly one
+allowed model. Luna and Terra are allowed, while Sol, unknown models, missing
+models, and duplicate model flags are denied using Codex's native
+`permissionDecision: deny` response. A missing installed policy uses the embedded
+restrictive default; a malformed installed policy fails closed.
+
+Install or audit the host-wide Luna default, managed `~/.codex/AGENTS.md` policy,
+data-driven worker allowlist, and enforcing hook with:
+
+```bash
+make install-codex-host-policy
+make check-codex-host-policy
+```
+
+The installer preserves unrelated config and AGENTS content, migrates the prior
+unmarked delegation contract, writes backups before replacement, updates files
+atomically, and validates the resulting Codex config in the Make target.
+
 ### `hearth-loom-hook` (`cmd/hearth-loom-hook/`)
 In-container HTTP-push observability shim used inside hearth-loom dispatch containers.
 Handles Claude Code and opencode hook events, POSTing to the hearth-loom gateway.

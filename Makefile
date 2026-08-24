@@ -14,6 +14,7 @@ GO  ?= go
 TS  := $(shell date +%Y%m%d-%H%M%S)
 
 .PHONY: build test install install-claude-hook-fast install-codex-hook \
+        install-codex-host-policy check-codex-host-policy \
         install-hearth-loom-hook install-steward clean-baks
 
 build:
@@ -44,6 +45,14 @@ install-codex-hook:
 	@[ -f "$(BIN)/codex-hook" ] && cp -p "$(BIN)/codex-hook" "$(BIN)/codex-hook.bak-$(TS)" || true
 	mv -f "$(BIN)/.codex-hook.new" "$(BIN)/codex-hook"
 	@echo "  codex-hook -> $(BIN)/codex-hook"
+
+install-codex-host-policy: test install-codex-hook
+	$(GO) run ./cmd/codex-host-policy install --hook "$(BIN)/codex-hook"
+	codex --strict-config --version
+
+check-codex-host-policy:
+	$(GO) run ./cmd/codex-host-policy check --hook "$(BIN)/codex-hook"
+	codex --strict-config --version
 
 install-hearth-loom-hook:
 	@mkdir -p "$(BIN)"

@@ -19,7 +19,7 @@ func newCodexHookCmd() *cobra.Command {
 		newCodexHookLifecycleCmd("stop", "turn_end", true),
 		newCodexHookLifecycleCmd("session-end", "ended", true),
 		newCodexHookLifecycleCmd("user-prompt-submit", "user_prompt", false),
-		newCodexHookToolCmd("pre-tool", "tool_pre"),
+		newCodexHookPreToolCmd(),
 		newCodexHookToolCmd("post-tool", "tool_post"),
 		newCodexHookToolCmd("pulse", "tool_post"), // legacy PostToolUse configuration
 		newCodexHookPermissionRequestCmd(),
