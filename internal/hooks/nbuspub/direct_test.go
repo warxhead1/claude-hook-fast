@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -113,6 +114,18 @@ func TestPublishDirectDedupSkips(t *testing.T) {
 	}
 }
 
+func TestSemanticEventIDIsUsedForDedup(t *testing.T) {
+	addr, got := fakeRedis(t, []string{"+OK\r\n", "$5\r\n1-abc\r\n", "$5\r\n1-abc\r\n"})
+	t.Setenv("NERVOUS_REDIS_URL", "redis://"+addr)
+	t.Setenv("NERVOUS_DEBUG_LOG", t.TempDir()+"/debug.jsonl")
+	if err := PublishDirect("bus.test.v1", "/s", `{"event_id":"codex-stable","event":"started"}`); err != nil {
+		t.Fatal(err)
+	}
+	if len(*got) == 0 || (*got)[0][1] != "nbus:dedup:codex-stable" {
+		t.Fatalf("want stable claim, got %v", *got)
+	}
+}
+
 func TestPublishDirectRedisDownIsDurable(t *testing.T) {
 	t.Setenv("NERVOUS_REDIS_URL", "redis://127.0.0.1:1") // nothing listens
 	log := t.TempDir() + "/debug.jsonl"
@@ -121,6 +134,31 @@ func TestPublishDirectRedisDownIsDurable(t *testing.T) {
 	// Fail-soft: debug.jsonl append succeeded, so this is success.
 	if err := PublishDirect("bus.test.v1", "/s", `{"a":1}`); err != nil {
 		t.Fatalf("want fail-soft nil, got %v", err)
+	}
+}
+
+func TestAsyncReceiptIsDurableBeforeWorker(t *testing.T) {
+	log := t.TempDir() + "/debug.jsonl"
+	t.Setenv("NERVOUS_DEBUG_LOG", log)
+	if err := appendAsyncReceipt("bus.test.v1", "/s", `{"event_id":"receipt-id"}`); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"receipt-id"`) {
+		t.Fatalf("receipt missing: %s", b)
+	}
+}
+
+func TestAsyncReceiptRequiresSync(t *testing.T) {
+	old := debugLogSync
+	defer func() { debugLogSync = old }()
+	debugLogSync = func(*os.File) error { return os.ErrInvalid }
+	t.Setenv("NERVOUS_DEBUG_LOG", t.TempDir()+"/debug.jsonl")
+	if err := appendAsyncReceipt("bus.test.v1", "/s", `{"event_id":"sync"}`); err == nil {
+		t.Fatal("unsynced receipt was accepted")
 	}
 }
 

@@ -20,6 +20,8 @@ package nbuspub
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -61,6 +63,14 @@ const WorkerSubcommand = "nbus-publish-worker"
 // which routinely exceeded the 2s hook budget Codex allows. Falls back
 // to the synchronous Publish only when the re-exec itself fails.
 func PublishAsync(channel, source, payload string) error {
+	// Fsynced pre-detach debug receipt: a crash between fork and worker start
+	// leaves replayable evidence. This is a backstop, not an acknowledged outbox.
+	if err := appendAsyncReceipt(channel, source, payload); err != nil {
+		hooklog.Writef("nbus-async receipt channel=%s err=%v", channel, err)
+		// Preserve direct delivery's durable-before-Redis contract when the
+		// outbox is unavailable rather than detaching an unrecoverable event.
+		return PublishDirect(channel, source, payload)
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return Publish(channel, source, payload)
@@ -78,6 +88,21 @@ func PublishAsync(channel, source, payload string) error {
 	return cmd.Process.Release()
 }
 
+func appendAsyncReceipt(channel, source, payload string) error {
+	if channel == "" || !json.Valid([]byte(payload)) {
+		return fmt.Errorf("invalid channel/payload")
+	}
+	env := envelope{SpecVersion: "1.0", ID: semanticEventID(payload), Source: source, Type: channel, Time: time.Now().UTC().Format("2006-01-02T15:04:05Z"), DataContentType: "application/json", Data: json.RawMessage(payload)}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	if !appendDebugLog(raw) {
+		return fmt.Errorf("durable receipt unavailable")
+	}
+	return nil
+}
+
 // WorkerMain is the detached-worker entry point. Direct Go delivery
 // first (~2-5ms, zero interpreter spawns — see direct.go); the nervous
 // CLI (bounded, hooklog-on-failure) only as fallback, e.g. an authed
@@ -86,7 +111,7 @@ func WorkerMain(args []string) {
 	if len(args) != 3 {
 		return
 	}
-	if err := PublishDirect(args[0], args[1], args[2]); err != nil {
+	if err := publishDirect(args[0], args[1], args[2], false); err != nil {
 		hooklog.Writef("nbus-direct fallback channel=%s err=%v", args[0], err)
 		_ = Publish(args[0], args[1], args[2])
 	}

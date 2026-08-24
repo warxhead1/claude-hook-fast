@@ -12,6 +12,7 @@
 package hooklog
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,4 +59,24 @@ func Writef(format string, args ...any) {
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = f.WriteString(line)
+}
+
+// WriteEvent records a compact JSON diagnostic without ever writing to hook
+// stdout/stderr. It is safe for malformed input and background-worker errors.
+func WriteEvent(name string, fields map[string]any) {
+	if fields == nil {
+		fields = make(map[string]any)
+	}
+	fields["ts"] = time.Now().UTC().Format(time.RFC3339Nano)
+	fields["event"] = name
+	b, err := json.Marshal(fields)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(resolvePath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.Write(append(b, '\n'))
 }
