@@ -36,6 +36,16 @@ explicitly overrides it. Cost selection is part of correctness.
   still mandatory for supervised Orca workers.
 - Do not launch multiple expensive workers speculatively. Start with Luna or
   MMX and escalate only from concrete evidence.
+- Use one fresh, explicitly pinned Codex worker per bounded Orca Task. Do not
+  reuse a Codex terminal with `worker-start --terminal`: Orca forbids combining
+  terminal reuse with `--model`, while this host requires an explicit model for
+  every Codex worker. A follow-up therefore gets a fresh terminal in the same
+  isolated worktree, with explicit `--agent codex --model ...`; reuse is allowed
+  only after Orca can attest and receipt the inherited model without weakening
+  this policy.
+- Process the accepted `worker_done` Delivery before cleanup, then call
+  `worker-release` for that exact Dispatch and acknowledge the Delivery. Never
+  infer completion from TUI idle, a commit, terminal prose, or a vanished tab.
 
 ## MMX worker-bee cadence
 
