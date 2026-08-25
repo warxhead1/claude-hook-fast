@@ -41,9 +41,20 @@ explicitly overrides it. Cost selection is part of correctness.
 
 - The primary coordinator owns design, interfaces, invariants, file scope,
   acceptance gates, review, and integration.
-- One MMX brief is one bounded mechanical slice. Run `mmx-dispatch lint` before
-  `run`, then use `status` plus `asks`, `harvest`, trusted diff review,
-  cherry-pick, and `reap`.
+- One MMX brief is one bounded mechanical slice. When Orca orchestration is
+  available, MMX workers must be first-class supervised Orca workers: create a
+  Run Task, compile the canonical brief from a validated contract, and launch
+  with `orca-ide orchestration worker-start --agent mmx` in an isolated
+  worktree. Inspect the receipt, require the requested/effective agent to be
+  `mmx`, and keep task, Dispatch, terminal, transcript, and cleanup visible via
+  `task-list`, `worker-list`, `worker-read`, and `worker-release`.
+- Do not launch an invisible headless MMX job alongside an unrelated Orca card.
+  If Orca-native MMX is unavailable, use the headless fallback explicitly:
+  `mmx-dispatch lint`, `run`, `status` plus `asks`, `harvest`, trusted diff
+  review, cherry-pick, and `reap`; report that the worker is not represented as
+  a normal live Orca subagent. A future external-runner adapter may replace
+  this fallback only when its receipts preserve the same lifecycle identities
+  and safety gates.
 - Never weaken gates to obtain a pass. Scope violations, gate failures, no-ops,
   and timeouts mean the brief or slice must be corrected.
 - MMX does not replace required runtime, visual, packaged, production, or human
