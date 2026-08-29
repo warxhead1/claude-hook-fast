@@ -12,7 +12,7 @@
       "when": {},
       "action": {
         "type": "block",
-        "message": "DISPATCH BLOCKED \u2014 Agent sent into a shared, non-isolated git checkout with no isolation: 'worktree'. An unisolated agent edits the SAME checkout every concurrent agent and session use, and can reach for whole-tree git ops when it hits an obstacle (2026-07-02: 450+ lines stashed onto main; 2026-07-11: an uncommitted implementation of crates/hearth-hermes overwritten by a second writer). Fix ONE of: (a) add isolation: 'worktree' \u2014 the default for anything that writes; (b) use a read-only agent type (Explore/Plan pass automatically); (c) if this is deploy/integration work that must touch the live checkout (service restart, live migration, dist build), do it INLINE in this session instead of dispatching \u2014 one writer per live checkout, and that writer is you."
+        "message": "DISPATCH BLOCKED \u2014 Agent sent into a shared, non-isolated git checkout with no isolation: 'worktree'. An unisolated agent edits the SAME checkout every concurrent agent and session use, and can reach for whole-tree git ops when it hits an obstacle (2026-07-02: 450+ lines stashed onto main; 2026-07-11: an uncommitted implementation of crates/hearth-hermes overwritten by a second writer). Fix ONE of: (a) add isolation: 'worktree' \u2014 the default for anything that writes; (b) if the only artifact is a document, dispatch subagent_type: 'report-writer' \u2014 it has Write but no Edit and no Bash, so it can drop a .md report into this checkout without being able to clobber anything (Explore/Plan pass too, but cannot write); (c) if this is deploy/integration work that must touch the live checkout (service restart, live migration, dist build), do it INLINE in this session instead of dispatching \u2014 one writer per live checkout, and that writer is you."
       }
     },
     {
@@ -26,7 +26,7 @@
       "when": {},
       "action": {
         "type": "block",
-        "message": "DISPATCH BLOCKED \u2014 Task sent into a shared, non-isolated git checkout with no isolation: 'worktree'. Same risk class as an unisolated Agent dispatch (2026-07-02 stash incident; 2026-07-11 hearth-hermes overwrite). Add isolation: 'worktree', use a read-only agent type (Explore/Plan pass automatically), or run live-checkout deploy steps inline in this session."
+        "message": "DISPATCH BLOCKED \u2014 Task sent into a shared, non-isolated git checkout with no isolation: 'worktree'. Same risk class as an unisolated Agent dispatch (2026-07-02 stash incident; 2026-07-11 hearth-hermes overwrite). Add isolation: 'worktree', use subagent_type: 'report-writer' when the only artifact is a .md report (Write but no Edit/Bash), or a read-only type (Explore/Plan), or run live-checkout deploy steps inline in this session."
       }
     },
     {

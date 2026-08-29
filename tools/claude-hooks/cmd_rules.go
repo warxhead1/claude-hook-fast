@@ -77,6 +77,9 @@
 //	"agent_no_isolation"         — fires when cwd is a shared (non-worktree)
 //	                                git checkout AND the Agent/Task call's
 //	                                tool_input has no non-blank isolation field.
+//	                                Exempt: subagent_type in
+//	                                nonClobberingAgentTypes (Explore, Plan,
+//	                                report-writer).
 //	"workflow_partial_isolation" — fires when a Workflow script's agent() call
 //	                                count exceeds its isolation: 'worktree'
 //	                                spec count, in a shared git checkout.
@@ -541,21 +544,35 @@ func checkAgentNoIsolation(cwd string, toolInput json.RawMessage) bool {
 	if err := json.Unmarshal(toolInput, &ti); err != nil {
 		return false // fail-open: malformed input
 	}
-	if st, _ := ti["subagent_type"].(string); readOnlyAgentTypes[strings.TrimSpace(st)] {
-		return false // read-only agent type — cannot clobber a shared checkout
+	if st, _ := ti["subagent_type"].(string); nonClobberingAgentTypes[strings.TrimSpace(st)] {
+		return false // cannot clobber a shared checkout (no Edit, no Bash)
 	}
 	isolation, _ := ti["isolation"].(string)
 	return strings.TrimSpace(isolation) == ""
 }
 
-// readOnlyAgentTypes are subagent types whose tool sets contain no
-// Write/Edit/NotebookEdit tools, so dispatching them into a shared checkout
-// cannot clobber concurrent uncommitted work. Deliberately narrow: types with
-// "All tools" or Bash access (general-purpose, sonnet-worker, haiku-grunt,
-// claude-code-guide, …) stay guarded — Bash can write.
-var readOnlyAgentTypes = map[string]bool{
-	"Explore": true,
-	"Plan":    true,
+// nonClobberingAgentTypes are subagent types that cannot clobber concurrent
+// uncommitted work in a shared checkout, so they are exempt from the isolation
+// requirement. Two admissible shapes:
+//
+//   - Strictly read-only (Explore, Plan): no Write/Edit/NotebookEdit at all.
+//   - Report-delivering (report-writer): Write but NO Edit and NO Bash. It can
+//     create a new .md report in the shared checkout — the whole point of the
+//     dispatch — but has no `git stash`, no `sed -i`, no `rm`, and no in-place
+//     modification of an existing file. The 2026-07-02 stash incident and the
+//     2026-07-11 overwrite both needed Bash or Edit; neither is reachable here.
+//
+// Deliberately narrow: types with "All tools" or Bash access (general-purpose,
+// sonnet-worker, haiku-grunt, claude-code-guide, …) stay guarded — Bash can write.
+//
+// A name here is only half the contract; the other half is the agent definition
+// at ~/.claude/agents/<name>.md, whose `tools:` frontmatter is what actually
+// removes Edit/Bash. Adding a name to this map without that definition (or
+// widening that definition's tools) silently reopens the hole.
+var nonClobberingAgentTypes = map[string]bool{
+	"Explore":       true,
+	"Plan":          true,
+	"report-writer": true,
 }
 
 // knownBuiltins lists every builtin this binary implements. A rule naming any

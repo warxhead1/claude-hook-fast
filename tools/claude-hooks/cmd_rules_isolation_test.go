@@ -88,6 +88,12 @@ func TestCheckAgentNoIsolation(t *testing.T) {
 		{"isolation: remote present -> pass", repo, `{"isolation":"remote"}`, false},
 		{"non-git cwd -> pass", nonGit, `{}`, false},
 		{"already inside agent worktree -> pass", wtDir, `{}`, false},
+		{"Explore agent type -> pass", repo, `{"subagent_type":"Explore"}`, false},
+		{"Plan agent type -> pass", repo, `{"subagent_type":"Plan"}`, false},
+		{"report-writer agent type -> pass", repo, `{"subagent_type":"report-writer"}`, false},
+		{"report-writer with surrounding space -> pass", repo, `{"subagent_type":" report-writer "}`, false},
+		{"sonnet-worker agent type -> block", repo, `{"subagent_type":"sonnet-worker"}`, true},
+		{"general-purpose agent type -> block", repo, `{"subagent_type":"general-purpose"}`, true},
 		{"empty tool_input -> fail-open pass", repo, ``, false},
 		{"malformed tool_input -> fail-open pass", repo, `not json`, false},
 	}
