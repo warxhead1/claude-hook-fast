@@ -11,8 +11,10 @@ package main
 //   1. WAVE FREEZE: if ~/.claude/wave-freeze/<repo> marker is fresh, block
 //      EVERYONE (lead included).
 //   2. SUBAGENT: transcript_path containing '/tasks/' -> block.
-//   3. ANCHORING: cwd is inside a worktree but the target is a primary
-//      checkout -> block (absolute-path main-anchoring leak).
+//   3. ANCHORING: cwd is inside a worktree but the target is the SAME
+//      repo's primary checkout -> block (absolute-path main-anchoring
+//      leak). A different repo's primary is a deliberate cross-repo edit:
+//      allowed, logged with rule=cross-repo.
 //
 // Exit 0 = allow; exit 2 = block. Kill switch: WORKTREE_GUARD_DISABLE=1.
 
@@ -49,7 +51,19 @@ func writeGuardVerdict(target, cwd string, isAgent bool) (verdict, root string) 
 		return "subagent", r
 	}
 	if cwd != "" {
-		if _, ck := repoOf(cwd); ck == "worktree" {
+		if wroot, ck := repoOf(cwd); ck == "worktree" {
+			// The main-anchoring leak this rule exists for is a worktree
+			// session writing into ITS OWN repo's primary checkout via an
+			// absolute path. A write into a DIFFERENT repo's primary is a
+			// deliberate cross-repo edit (ops files, sister-repo configs) —
+			// blocking it only trains Bash-level bypasses (measured
+			// 2026-08-28: two operator-approved compose edits detoured
+			// through python heredocs). Allow-with-log so audits still see
+			// it. If the worktree's primary can't be resolved, keep the
+			// block: fail closed to the original behavior.
+			if pr, ok := worktreePrimary(wroot); ok && pr != r {
+				return "cross-repo", r
+			}
 			return "anchoring", r
 		}
 	}
@@ -86,6 +100,12 @@ func cmdWorktreeWriteGuard() {
 	target := realpathBest(path)
 	isAgent := hookio.IsSubagentTranscript(input.TranscriptPath)
 	verdict, root := writeGuardVerdict(target, input.Cwd, isAgent)
+	if verdict == "cross-repo" {
+		wgLog("write-guard", "ALLOW", fmt.Sprintf(
+			"tool=%s target=%s repo=%s agent=%v tx=%s rule=cross-repo cwd=%s",
+			input.ToolName, target, root, isAgent, input.TranscriptPath, input.Cwd))
+		return
+	}
 	// tx in the detail is forensic: isAgent now catches both the /tasks/
 	// (fresh) and /subagents/ (resumed) transcript forms, but if a future
 	// harness path shape slips past IsSubagentTranscript, the logged tx is

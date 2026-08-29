@@ -217,6 +217,21 @@ func TestWriteGuardVerdict(t *testing.T) {
 	if v, _ := writeGuardVerdict(target, f.wt1, false); v != "anchoring" {
 		t.Errorf("worktree-cwd write to primary: got %q, want anchoring", v)
 	}
+	// Cross-repo: a worktree of ONE repo writing a DIFFERENT repo's primary
+	// is a deliberate ops edit, not a main-anchoring leak — allow-with-log.
+	if v, _ := writeGuardVerdict(filepath.Join(f.clone, "src.rs"), f.wt1, false); v != "cross-repo" {
+		t.Errorf("cross-repo write from worktree cwd: got %q, want cross-repo", v)
+	}
+	// Unresolvable worktree primary (broken gitdir pointer): fail closed to
+	// the original anchoring block.
+	wtBroken := filepath.Join(f.base, "wt-broken")
+	if err := os.MkdirAll(wtBroken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(wtBroken, ".git"), "gitdir: /nonexistent/gitdir\n")
+	if v, _ := writeGuardVerdict(target, realpathBest(wtBroken), false); v != "anchoring" {
+		t.Errorf("broken-pointer worktree cwd: got %q, want anchoring (fail closed)", v)
+	}
 	if v, _ := writeGuardVerdict(filepath.Join(f.wt1, "src.rs"), f.wt1, true); v != "" {
 		t.Errorf("agent write to own worktree: got %q, want allow", v)
 	}
