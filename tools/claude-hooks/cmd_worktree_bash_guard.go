@@ -91,8 +91,9 @@ var (
 )
 
 type bashViolation struct {
-	Why string
-	Seg string
+	Why  string
+	Seg  string
+	Rule string // "subagent" or "wave-freeze" — same field style as write-guard's rule=
 }
 
 func cmdWorktreeBashGuard() {
@@ -121,7 +122,7 @@ func cmdWorktreeBashGuard() {
 		logged = logged[:200]
 	}
 	wgLog("bash-guard", "BLOCK",
-		fmt.Sprintf("cmd=%q agent=%v cwd=%s", logged, isAgent, input.Cwd))
+		fmt.Sprintf("cmd=%q agent=%v cwd=%s rule=%s", logged, isAgent, input.Cwd, bashGuardRules(violations)))
 
 	fmt.Fprint(os.Stderr, "WORKTREE BASH GUARD (global): blocked shell mutation of a "+
 		"shared primary checkout.\n\n")
@@ -137,6 +138,24 @@ func cmdWorktreeBashGuard() {
 			"Lead: lift with `wave-freeze off <repo-root>` — inline in the same\n"+
 			"command works: `wave-freeze off <root> && git merge ...`.\n")
 	hookExit(2)
+}
+
+// bashGuardRules collapses one or more violations' Rule fields into a
+// single deduped, order-preserving comma list for the log line — a bash
+// command can trip both a git-mutation violation and a shell-writer
+// violation in one call, and can trip subagent+wave-freeze together when
+// a subagent runs during a freeze.
+func bashGuardRules(violations []bashViolation) string {
+	seen := map[string]bool{}
+	var rules []string
+	for _, v := range violations {
+		if v.Rule == "" || seen[v.Rule] {
+			continue
+		}
+		seen[v.Rule] = true
+		rules = append(rules, v.Rule)
+	}
+	return strings.Join(rules, ",")
 }
 
 // bashGuardViolations is the pure core: model the command segment by
@@ -186,7 +205,8 @@ func bashGuardViolations(command, startCwd string, isAgent bool) []bashViolation
 			violations = append(violations, bashViolation{
 				Why: fmt.Sprintf("write to %s inside shared primary checkout %s (%s)",
 					target, root, why),
-				Seg: seg,
+				Seg:  seg,
+				Rule: why,
 			})
 		}
 	}
@@ -320,7 +340,8 @@ func bashGuardViolations(command, startCwd string, isAgent bool) []bashViolation
 					violations = append(violations, bashViolation{
 						Why: fmt.Sprintf("git %s targets shared primary checkout %s (%s)",
 							sub, root, why),
-						Seg: seg,
+						Seg:  seg,
+						Rule: why,
 					})
 				}
 			}

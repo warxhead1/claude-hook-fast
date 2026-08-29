@@ -87,6 +87,7 @@ func TestBashGuardViolations(t *testing.T) {
 		agent  bool
 		strict string // "" keeps fixture default ("1")
 		block  bool
+		rule   string // "" means not checked; else every violation's Rule must equal this
 	}{
 		// --- the real-world false positives that motivated v2 ---
 		{name: "cd-then-relative-redirect-outside-repo",
@@ -132,16 +133,16 @@ func TestBashGuardViolations(t *testing.T) {
 		// --- true positives that must survive v2 ---
 		{name: "redirect-into-frozen-primary",
 			cmd:   "echo x > out.log",
-			cwd:   f.primary, block: true},
+			cwd:   f.primary, block: true, rule: "wave-freeze"},
 		{name: "agent-redirect-into-primary-abs",
 			cmd:   "echo hi > " + f.primary + "/out.log",
-			cwd:   f.wt1, agent: true, block: true},
+			cwd:   f.wt1, agent: true, block: true, rule: "subagent"},
 		{name: "agent-git-commit-in-primary",
 			cmd:   "git commit -m x",
-			cwd:   f.primary, agent: true, block: true},
+			cwd:   f.primary, agent: true, block: true, rule: "subagent"},
 		{name: "git-add-under-freeze",
 			cmd:   "git add .",
-			cwd:   f.primary, block: true},
+			cwd:   f.primary, block: true, rule: "wave-freeze"},
 		{name: "git-stash-pop-mutates",
 			cmd:   "git stash pop",
 			cwd:   f.primary, block: true},
@@ -202,6 +203,51 @@ func TestBashGuardViolations(t *testing.T) {
 			if (len(got) > 0) != tc.block {
 				t.Errorf("cmd=%q cwd=%q agent=%v: got violations %v, want block=%v",
 					tc.cmd, tc.cwd, tc.agent, got, tc.block)
+			}
+			if tc.rule != "" {
+				for _, v := range got {
+					if v.Rule != tc.rule {
+						t.Errorf("cmd=%q: violation Rule=%q, want %q (%+v)",
+							tc.cmd, v.Rule, tc.rule, v)
+					}
+				}
+				if got := bashGuardRules(got); got != tc.rule {
+					t.Errorf("cmd=%q: bashGuardRules=%q, want %q", tc.cmd, got, tc.rule)
+				}
+			}
+		})
+	}
+}
+
+// TestBashGuardRules covers the log-line aggregation directly: dedup,
+// order-preservation, and the mixed subagent+wave-freeze case a subagent
+// running during a freeze can trip (each violation's Rule is "subagent"
+// per verdictFor's precedence, but the helper must not assume a single
+// rule ever reaches it — a future verdictFor change could emit both).
+func TestBashGuardRules(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []bashViolation
+		want string
+	}{
+		{name: "empty", in: nil, want: ""},
+		{name: "single-subagent",
+			in:   []bashViolation{{Rule: "subagent"}},
+			want: "subagent"},
+		{name: "dedup-same-rule-twice",
+			in:   []bashViolation{{Rule: "wave-freeze"}, {Rule: "wave-freeze"}},
+			want: "wave-freeze"},
+		{name: "order-preserved-mixed",
+			in:   []bashViolation{{Rule: "subagent"}, {Rule: "wave-freeze"}, {Rule: "subagent"}},
+			want: "subagent,wave-freeze"},
+		{name: "empty-rule-skipped",
+			in:   []bashViolation{{Rule: ""}, {Rule: "subagent"}},
+			want: "subagent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bashGuardRules(tc.in); got != tc.want {
+				t.Errorf("bashGuardRules(%+v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
