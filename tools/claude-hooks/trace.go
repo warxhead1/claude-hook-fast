@@ -14,8 +14,26 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
+)
+
+// Rotation: hook-trace.jsonl is appended by every hook invocation of every
+// live session, concurrently — measured 199MB / 1.35M lines with 25 days of
+// unrotated growth. Rotation must never fail the hook: a lost race (another
+// process rotated first) or a failed rename is swallowed, not reported.
+//
+// Each claude-hook-fast subcommand is its own short-lived process (see
+// main.go), so there is no persistent counter to sample "1-in-N writes"
+// across invocations — an in-process counter would just always be 1. A
+// single os.Stat per invocation is cheap next to the fork/exec that already
+// happened to get here, so traceMaybeRotate just checks every time instead.
+const (
+	traceMaxSize       = 50 * 1024 * 1024    // rotate once the live file exceeds this
+	traceMaxArchives   = 3                   // keep at most this many rotated files...
+	traceMaxArchiveAge = 14 * 24 * time.Hour // ...and never one older than this
 )
 
 var (
@@ -165,10 +183,71 @@ func traceFinish(exitCode int) {
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(tracePath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	path := tracePath()
+	traceMaybeRotate(path)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = f.Write(append(line, '\n'))
+}
+
+// traceMaybeRotate checks whether the live trace file has grown past
+// traceMaxSize and, if so, renames it out of the way so the next append
+// recreates it fresh. Every concurrent hook invocation calls this
+// independently, so losing the rename race (another process already
+// rotated) is the expected common case, not an error.
+func traceMaybeRotate(path string) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() < traceMaxSize {
+		return
+	}
+	ext := filepath.Ext(path)
+	archive := strings.TrimSuffix(path, ext) + "-" + time.Now().UTC().Format("20060102-150405") + ext
+	if err := os.Rename(path, archive); err != nil {
+		// Someone else rotated first, or the rename otherwise failed —
+		// either way the hook must proceed; the next OpenFile recreates
+		// whatever file is (or isn't) there.
+		return
+	}
+	tracePruneArchives(filepath.Dir(path))
+}
+
+// tracePruneArchives deletes rotated hook-trace-*.jsonl files beyond the
+// newest traceMaxArchives, and any archive older than traceMaxArchiveAge
+// regardless of count. Best-effort: errors are swallowed, never surfaced.
+func tracePruneArchives(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type archiveFile struct {
+		path string
+		mod  time.Time
+	}
+	var archives []archiveFile
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, "hook-trace-") || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		archives = append(archives, archiveFile{filepath.Join(dir, name), info.ModTime()})
+	}
+	sort.Slice(archives, func(i, j int) bool { return archives[i].mod.After(archives[j].mod) })
+
+	cutoff := time.Now().Add(-traceMaxArchiveAge)
+	for i, a := range archives {
+		if i < traceMaxArchives && a.mod.After(cutoff) {
+			continue
+		}
+		_ = os.Remove(a.path)
+	}
 }

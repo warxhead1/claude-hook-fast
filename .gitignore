@@ -15,4 +15,4 @@ tools/claude-hooks/claude-hook-fast
 *.swo
 chf.bak
 .claude/worktrees/
-claude-hooks
+/claude-hooks
