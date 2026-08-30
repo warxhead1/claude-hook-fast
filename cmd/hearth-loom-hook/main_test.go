@@ -212,11 +212,11 @@ func TestPostJSON_TimeoutDoesNotBlock(t *testing.T) {
 
 func TestUrlEscape_AllowsSafeIDs(t *testing.T) {
 	cases := map[string]string{
-		"loom-abc123":      "loom-abc123",
-		"loom.fooBar_42":   "loom.fooBar_42",
-		"loom abc":         "", // space rejected
-		"loom/../etc":      "", // slash rejected
-		"":                 "",
+		"loom-abc123":    "loom-abc123",
+		"loom.fooBar_42": "loom.fooBar_42",
+		"loom abc":       "", // space rejected
+		"loom/../etc":    "", // slash rejected
+		"":               "",
 	}
 	for in, want := range cases {
 		if got := urlEscape(in); got != want {
@@ -282,8 +282,8 @@ func TestIsSessionRegistered(t *testing.T) {
 	cases := map[string]bool{
 		"/api/v2/loomies/loom-abc/session/registered": true,
 		"/api/v2/loomies/loom-xyz/session/registered": true,
-		"/api/v2/loomies/loom-abc/session/stopped":   false,
-		"/api/v2/loomies/loom-abc/tool-event":          false,
+		"/api/v2/loomies/loom-abc/session/stopped":    false,
+		"/api/v2/loomies/loom-abc/tool-event":         false,
 		"/api/v2/beads":                               false,
 	}
 	for url, want := range cases {

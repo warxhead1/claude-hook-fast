@@ -7,9 +7,9 @@ import (
 
 func TestSourceTag(t *testing.T) {
 	cases := map[string]string{
-		"":             "/claude-host/unknown",
-		"tengine":      "/claude-host/tengine",
-		"hearth-loom":  "/claude-host/hearth-loom",
+		"":            "/claude-host/unknown",
+		"tengine":     "/claude-host/tengine",
+		"hearth-loom": "/claude-host/hearth-loom",
 	}
 	for in, want := range cases {
 		if got := SourceTag(in); got != want {

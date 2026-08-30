@@ -897,10 +897,10 @@ const (
 	chanPermissionRequested      = "bus.hearth.session.permission.requested.v1"
 	chanSessionQuestion          = "bus.hearth.session.question.v1"
 	chanSessionQuestionResponded = "bus.hearth.session.question.responded.v1"
-	chanSessionMessage      = "bus.hearth.session.message.v1"
-	chanSessionError        = "bus.hearth.session.error.v1"
-	chanSessionEnd          = "bus.hearth.session.end.v1"
-	chanSubagentLifecycle   = "bus.hearth.subagent.lifecycle.v1"
+	chanSessionMessage           = "bus.hearth.session.message.v1"
+	chanSessionError             = "bus.hearth.session.error.v1"
+	chanSessionEnd               = "bus.hearth.session.end.v1"
+	chanSubagentLifecycle        = "bus.hearth.subagent.lifecycle.v1"
 )
 
 // cmdNbusPermissionRequest handles the PermissionRequest hook — fires when
@@ -1043,9 +1043,9 @@ func cmdNbusPermissionRequest() {
 			{"label": "Yes, and don't ask again for this session", "is_default": false, "checked": false},
 			{"label": "No", "is_default": false, "checked": false},
 		},
-		"deep_link":      "session://" + in.SessionID,
-		"ts":             now.Format(time.RFC3339Nano),
-		"expires_at":     expires.Format(time.RFC3339Nano),
+		"deep_link":  "session://" + in.SessionID,
+		"ts":         now.Format(time.RFC3339Nano),
+		"expires_at": expires.Format(time.RFC3339Nano),
 	}
 	publishNbusEnvelope(chanPermissionRequested, env, can)
 	hooklog.Writef("nbus-permission-request: published corr=%s session=%s tool=%s pane=%s",

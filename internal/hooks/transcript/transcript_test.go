@@ -168,9 +168,9 @@ func TestLatestUsage_MissingFile(t *testing.T) {
 // exercising the seek-failure path.
 type seekableError struct{}
 
-func (e *seekableError) Read(_ []byte) (int, error)       { return 0, io.ErrUnexpectedEOF }
+func (e *seekableError) Read(_ []byte) (int, error)         { return 0, io.ErrUnexpectedEOF }
 func (e *seekableError) Seek(_ int64, _ int) (int64, error) { return 0, io.ErrUnexpectedEOF }
-func (e *seekableError) Close() error                      { return nil }
+func (e *seekableError) Close() error                       { return nil }
 
 func TestLatestUsage_SeekError(t *testing.T) {
 	got := latestUsageFromReader(&seekableError{})

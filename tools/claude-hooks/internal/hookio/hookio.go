@@ -9,16 +9,16 @@ import (
 
 type HookInput struct {
 	ToolName           string          `json:"tool_name"`
-	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
-	Parameters        map[string]any  `json:"parameters,omitempty"`
-	RequiresApproval  bool            `json:"requires_approval,omitempty"`
-	RequiresPermission bool           `json:"requires_permission,omitempty"`
-	SessionID         string          `json:"session_id,omitempty"`
-	TranscriptPath    string          `json:"transcript_path,omitempty"`
-	ConversationID    string          `json:"conversation_id,omitempty"`
-	Message           string          `json:"message,omitempty"`
-	PermissionMode    string          `json:"permission_mode,omitempty"`
-	Cwd               string          `json:"cwd,omitempty"`
+	ToolInput          json.RawMessage `json:"tool_input,omitempty"`
+	Parameters         map[string]any  `json:"parameters,omitempty"`
+	RequiresApproval   bool            `json:"requires_approval,omitempty"`
+	RequiresPermission bool            `json:"requires_permission,omitempty"`
+	SessionID          string          `json:"session_id,omitempty"`
+	TranscriptPath     string          `json:"transcript_path,omitempty"`
+	ConversationID     string          `json:"conversation_id,omitempty"`
+	Message            string          `json:"message,omitempty"`
+	PermissionMode     string          `json:"permission_mode,omitempty"`
+	Cwd                string          `json:"cwd,omitempty"`
 }
 
 func ReadHookInput() (*HookInput, bool) {

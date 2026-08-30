@@ -4,11 +4,11 @@
 //
 // One Go binary, multiple subcommands:
 //
-//   hearth-loom-hook session-start    # SessionStart hook
-//   hearth-loom-hook tool-pre         # PreToolUse hook
-//   hearth-loom-hook tool-post        # PostToolUse hook
-//   hearth-loom-hook stop             # Stop hook
-//   hearth-loom-hook subagent-stop    # SubagentStop hook (alias of stop)
+//	hearth-loom-hook session-start    # SessionStart hook
+//	hearth-loom-hook tool-pre         # PreToolUse hook
+//	hearth-loom-hook tool-post        # PostToolUse hook
+//	hearth-loom-hook stop             # Stop hook
+//	hearth-loom-hook subagent-stop    # SubagentStop hook (alias of stop)
 //
 // Each subcommand reads its hook event from stdin (JSON, schema defined
 // by the runtime), enriches with $HEARTH_BEAD_ID + the session-id

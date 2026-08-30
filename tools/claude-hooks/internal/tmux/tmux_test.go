@@ -7,7 +7,7 @@ import (
 func TestFormatToolStatus(t *testing.T) {
 	tests := []struct {
 		toolName string
-		want    string
+		want     string
 	}{
 		{"Bash", "⚡ bash"},
 		{"Read", "📖 read"},

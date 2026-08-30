@@ -29,10 +29,10 @@ func cmdTimings() {
 		}
 	}
 	type row struct {
-		bin, cmd                string
-		count                   int
-		p50, p95, max           float64
-		last                    string
+		bin, cmd      string
+		count         int
+		p50, p95, max float64
+		last          string
 	}
 	var rows []row
 	for k, ms := range groups {
