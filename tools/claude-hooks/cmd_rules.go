@@ -236,11 +236,20 @@ func (c *configCache) load(path string) (*rulesConfig, map[int]*regexp.Regexp, m
 
 // findRulesConfig walks up from startDir looking for .claude/hook-rules.json.
 func findRulesConfig(startDir string) string {
+	// The walk-up may reach $HOME (that is how project discovery finds and
+	// dedupes the user-global config) but never climbs above it: nothing
+	// above a home directory is a project, and stopping there keeps test
+	// sandboxes with TMPDIR under the real home from leaking the real
+	// global config into their walks.
+	home, _ := os.UserHomeDir()
 	dir := startDir
 	for i := 0; i < 20; i++ {
 		candidate := filepath.Join(dir, ".claude", "hook-rules.json")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
+		}
+		if home != "" && dir == home {
+			break
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {

@@ -27,7 +27,19 @@ import (
 const wgTTL = 2 * time.Hour
 
 var wgAllowRelPrefixes = []string{".planning/", ".claude/", ".beads/"}
-var wgEphemeralPrefixes = []string{"/tmp/", "/var/tmp/", "/dev/shm/"}
+var wgEphemeralPrefixes = ephemeralPrefixes()
+
+// ephemeralPrefixes returns the roots under which a checkout counts as a
+// scratch/ephemeral tree. $TMPDIR is included because this box redirects it
+// off tmpfs (data2-disk ruling): scratch clones made with mktemp land there,
+// and test sandboxes (t.TempDir) must stay exempt wherever TMPDIR points.
+func ephemeralPrefixes() []string {
+	pre := []string{"/tmp/", "/var/tmp/", "/dev/shm/"}
+	if td := strings.TrimSuffix(os.TempDir(), "/"); td != "" && td != "/tmp" {
+		pre = append(pre, td+"/")
+	}
+	return pre
+}
 
 func wgDisabled() bool {
 	return os.Getenv("WORKTREE_GUARD_DISABLE") == "1"
