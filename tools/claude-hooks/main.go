@@ -50,8 +50,6 @@ func main() {
 		cmdTmuxNotification()
 	case "tmux-thinking":
 		cmdTmuxThinking()
-	case "post-hearth-loom":
-		cmdPostHearthLoom()
 	// Bash-to-Go migration: nbus emitters. See cmd_nbus.go.
 	case "nbus-activity":
 		cmdNbusActivity()
@@ -73,10 +71,6 @@ func main() {
 		cmdNbusSessionEnd()
 	case "nbus-subagent-lifecycle":
 		cmdNbusSubagentLifecycle()
-	case "register-with-hearth-loom":
-		cmdRegisterWithHearthLoom()
-	case "deregister":
-		cmdDeregister()
 	case "steering-poll":
 		cmdSteeringPoll()
 	// Ports of Node/bash hooks (see cmd_cleanup_tmp.go, cmd_tengine_guards.go).
@@ -91,16 +85,12 @@ func main() {
 		cmdShaderHardcodedIDsGuard()
 	case "shader-compile-validator":
 		cmdShaderCompileValidator()
-	case "flow":
-		cmdFlowTelemetry()
 	case "rules":
 		cmdRules()
 	case "session-init":
 		cmdSessionInit()
 	case "plan-resume":
 		cmdPlanResume()
-	case "brain-register":
-		cmdBrainRegister()
 	case "memory-staleness":
 		cmdMemoryStaleness()
 	case "kb-prime-siblings":

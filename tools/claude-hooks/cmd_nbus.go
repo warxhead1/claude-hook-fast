@@ -611,69 +611,6 @@ func paneIDForArbiter() string {
 	return os.Getenv("TMUX_PANE")
 }
 
-// cmdRegisterWithHearthLoom replaces session-start/register-with-hearth-loom.sh.
-// POSTs the CCM register payload using the new project resolver so the
-// daemon ties the session to the canonical (project, worktree) pair.
-func cmdRegisterWithHearthLoom() {
-	in, _ := readStdinForHook()
-	can, wt := project.Resolve(in.EffectiveCWD())
-
-	paneID := os.Getenv("ZELLIJ_PANE_ID")
-	if paneID == "" {
-		paneID = os.Getenv("TMUX_PANE")
-	}
-	if paneID == "" {
-		paneID = fmt.Sprintf("shell-%d", os.Getpid())
-	}
-
-	payload := map[string]any{
-		"pane_id":    paneID,
-		"cwd":        in.EffectiveCWD(),
-		"agent_type": "claude-code",
-		"session_id": in.SessionID,
-		"project":    can,
-		"worktree":   wt,
-		"display":    project.Display(can, wt),
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		hooklog.Writef("register marshal: %v", err)
-		return
-	}
-	// Reuse the CCM register endpoint convention from the bash script.
-	// The daemon listens at $HEARTH_LOOM_URL (default 127.0.0.1:5908)
-	// or $HEARTH_LOOM_ADDR (legacy bash env, host:port — accepted for
-	// drop-in compatibility).
-	url := hearthLoomURL() + "/api/v2/ccm/register"
-	if addr := strings.TrimSpace(os.Getenv("HEARTH_LOOM_ADDR")); addr != "" {
-		url = "http://" + addr + "/api/v2/ccm/register"
-	}
-	if err := client.PostJSON(url, body); err != nil {
-		hooklog.Writef("register: %v", err)
-	}
-}
-
-// cmdDeregister forwards Stop / SubagentStop to the daemon's session
-// hook endpoint. The event name is derived from the subcommand
-// argument: `deregister Stop` or `deregister SubagentStop`. When no
-// argument is supplied we default to "Stop" to match the bash hook
-// convention (one script per directory).
-func cmdDeregister() {
-	eventName := "Stop"
-	if flag.NArg() >= 2 && flag.Arg(1) != "" {
-		eventName = flag.Arg(1)
-	}
-	in, raw := readStdinForHook()
-	if in.SessionID == "" {
-		return
-	}
-	url := fmt.Sprintf("%s/api/v2/sessions/%s/hook/%s",
-		hearthLoomURL(), in.SessionID, eventName)
-	if err := client.PostJSON(url, raw); err != nil {
-		hooklog.Writef("deregister[%s]: %v", eventName, err)
-	}
-}
-
 // steeringTargetID returns the id this hook invocation should poll/steer
 // against, and a bool that is true when the id is a self-identified subagent.
 //
