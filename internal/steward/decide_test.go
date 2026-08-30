@@ -110,8 +110,8 @@ func TestFanoutGate(t *testing.T) {
 	}{
 		{50, true, FanoutAllow},
 		{78, true, FanoutWarn},
-		{95, false, FanoutWarn},  // critical but Phase-3 block disabled
-		{95, true, FanoutBlock},  // critical with block enabled
+		{95, false, FanoutWarn}, // critical but Phase-3 block disabled
+		{95, true, FanoutBlock}, // critical with block enabled
 	}
 	for _, tc := range tests {
 		snap := base(tc.util, LevelNormal)

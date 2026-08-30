@@ -85,10 +85,10 @@ type SessionDoc struct {
 
 // SubagentDoc is one lingering subagent's public row.
 type SubagentDoc struct {
-	ID       string `json:"id"`
-	ParentID string `json:"parent_id"`
-	Name     string `json:"name"`
-	StaleForS int   `json:"stale_for_s"`
+	ID        string `json:"id"`
+	ParentID  string `json:"parent_id"`
+	Name      string `json:"name"`
+	StaleForS int    `json:"stale_for_s"`
 }
 
 // BuildBudgetDoc renders a Snapshot + resolved level/gate into the public

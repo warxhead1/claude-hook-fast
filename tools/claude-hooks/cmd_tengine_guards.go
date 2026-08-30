@@ -23,12 +23,12 @@ import (
 var tenginePrefixes = []string{"RES_", "WT_", "POOL_", "GIGA_HEALTH_", "POOL_FLAG_", "POOL_MAX_"}
 
 var generatedConstantsFiles = map[string]bool{
-	"constants.rs":             true,
-	"tengine_constants.h":      true,
-	"tengine_constants.glsl":   true,
-	"tengine_constants.slang":  true,
-	"constants_generator.py":   true,
-	"tengine-constants.json":   true,
+	"constants.rs":            true,
+	"tengine_constants.h":     true,
+	"tengine_constants.glsl":  true,
+	"tengine_constants.slang": true,
+	"constants_generator.py":  true,
+	"tengine-constants.json":  true,
 }
 
 var acceptableAliases = []*regexp.Regexp{

@@ -327,11 +327,11 @@ func latestUsageFromTranscript(path string) map[string]any {
 	// envelope assembled above via the direct field check (already done).
 	// Return a dummy map to trigger the assertion path.
 	return map[string]any{
-		"input_tokens":     100,
-		"output_tokens":    50,
+		"input_tokens":       100,
+		"output_tokens":      50,
 		"cache_read_tokens":  0,
 		"cache_write_tokens": 2000,
-		"model":            "claude-sonnet-4-6",
+		"model":              "claude-sonnet-4-6",
 	}
 }
 

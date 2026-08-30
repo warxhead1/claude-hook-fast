@@ -235,7 +235,7 @@ func (s Snapshot) ForecastExhaust() time.Duration {
 	if remaining <= 0 {
 		return 0
 	}
-	return time.Duration(remaining/s.BurnPctPerMin*float64(time.Minute))
+	return time.Duration(remaining / s.BurnPctPerMin * float64(time.Minute))
 }
 
 // ActionKind enumerates the effects Decide can request. The daemon's executor

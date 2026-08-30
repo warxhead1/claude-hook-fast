@@ -5,14 +5,14 @@
 // <SessionInfoDir>/inbox.jsonl. This file turns those queued messages into
 // context the running agent actually sees, via two Claude Code hook outputs:
 //
-//   SessionStart → {"hookSpecificOutput":{"hookEventName":"SessionStart",
-//                    "additionalContext": <messages>}}
-//     Catches messages delivered while the session was OFFLINE/cold — they're
-//     surfaced as the session boots.
+//	SessionStart → {"hookSpecificOutput":{"hookEventName":"SessionStart",
+//	                 "additionalContext": <messages>}}
+//	  Catches messages delivered while the session was OFFLINE/cold — they're
+//	  surfaced as the session boots.
 //
-//   Stop        → {"decision":"block","reason": <messages + nudge>}
-//     Catches messages that arrived WHILE the agent was working: when it tries
-//     to end its turn, the block pulls it back to consume them first.
+//	Stop        → {"decision":"block","reason": <messages + nudge>}
+//	  Catches messages that arrived WHILE the agent was working: when it tries
+//	  to end its turn, the block pulls it back to consume them first.
 //
 // Loop safety: a hook-owned byte offset (inbox.hook-offset) means each message
 // is surfaced exactly once — after a Stop block advances the offset, the same

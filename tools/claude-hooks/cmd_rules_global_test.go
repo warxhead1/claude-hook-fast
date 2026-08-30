@@ -111,8 +111,8 @@ func TestBindingSpecPrefix(t *testing.T) {
 		{"HERMES-H3-INVESTIGATE-DECIDE.md", "HERMES-H3"},
 		{"HERMES-H3-INVESTIGATION-ACTIONS.md", "HERMES-H3"},
 		{"LOOM-B1-DEADLETTER.md", "LOOM-B1"},
-		{"README.md", ""},          // one token — no shared prefix inferable
-		{"HERMES-H3.md", ""},       // two tokens — the whole name IS the prefix, no suffix to vary
+		{"README.md", ""},    // one token — no shared prefix inferable
+		{"HERMES-H3.md", ""}, // two tokens — the whole name IS the prefix, no suffix to vary
 		{"a-b-c.md", "a-b"},
 	}
 	for _, c := range cases {
@@ -173,4 +173,3 @@ func TestCheckDuplicateBindingSpec(t *testing.T) {
 		}
 	})
 }
-

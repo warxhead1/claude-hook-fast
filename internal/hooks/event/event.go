@@ -36,16 +36,16 @@ import (
 // HookInput is the parsed stdin payload, normalized across runtimes.
 // Optional fields are zero-valued when absent.
 type HookInput struct {
-	SessionID        string          `json:"session_id"`
-	TranscriptPath   string          `json:"transcript_path"`
-	CWD              string          `json:"cwd"`
-	ToolName         string          `json:"tool_name"`
-	ToolInput        json.RawMessage `json:"tool_input"`
-	ToolResponse     json.RawMessage `json:"tool_response"`
-	ParentToolUseID  string          `json:"parent_tool_use_id"`
-	Source           string          `json:"source"`
-	Message          string          `json:"message"`
-	StopReason       string          `json:"stop_reason"`
+	SessionID       string          `json:"session_id"`
+	TranscriptPath  string          `json:"transcript_path"`
+	CWD             string          `json:"cwd"`
+	ToolName        string          `json:"tool_name"`
+	ToolInput       json.RawMessage `json:"tool_input"`
+	ToolResponse    json.RawMessage `json:"tool_response"`
+	ParentToolUseID string          `json:"parent_tool_use_id"`
+	Source          string          `json:"source"`
+	Message         string          `json:"message"`
+	StopReason      string          `json:"stop_reason"`
 
 	// MessageDisplay hook fields.
 	MessageText string `json:"message_text"`
@@ -56,8 +56,8 @@ type HookInput struct {
 	ErrorMessage string `json:"error_message"`
 
 	// SessionEnd hook fields.
-	EndReason  string `json:"end_reason"`
-	TurnCount  int    `json:"turn_count"`
+	EndReason string `json:"end_reason"`
+	TurnCount int    `json:"turn_count"`
 
 	// SubagentStart / SubagentStop fields.
 	SubagentType string `json:"subagent_type"`
