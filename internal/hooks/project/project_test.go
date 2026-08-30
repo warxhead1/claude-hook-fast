@@ -190,6 +190,92 @@ func TestResolve_PreservesPriorBehaviour(t *testing.T) {
 	}
 }
 
+// TestResolve_Data2WorktreesLayout pins the 2026-08-24+ convention:
+// /home/eric/data2/worktrees/<project>/<name>, where <name> may be an
+// agent-<hex> dispatch id OR a human-chosen lane name (board-tab,
+// lifecycle-emission, notify-routing are real examples). Both must
+// resolve identically — the signal is the LAYOUT, never an "agent-"
+// prefix.
+func TestResolve_Data2WorktreesLayout(t *testing.T) {
+	data2Root := t.TempDir()
+	t.Setenv("HEARTH_HOOK_DATA2_WORKTREES_ROOT", data2Root)
+	// Legacy projects root must be irrelevant here — point it somewhere
+	// that shares nothing with data2Root to prove no cross-talk.
+	t.Setenv("HEARTH_HOOK_PROJECTS_ROOT", makeFakeProjects(t))
+
+	cases := []struct {
+		name    string
+		cwd     string
+		wantCan string
+		wantWT  string
+	}{
+		{
+			name:    "agent-named lane",
+			cwd:     filepath.Join(data2Root, "tengine", "agent-a65396b02f1705f90"),
+			wantCan: "tengine",
+			wantWT:  "agent-a65396b02f1705f90",
+		},
+		{
+			name:    "human-named lane",
+			cwd:     filepath.Join(data2Root, "hearth", "board-tab"),
+			wantCan: "hearth",
+			wantWT:  "board-tab",
+		},
+		{
+			name:    "human-named lane, another example",
+			cwd:     filepath.Join(data2Root, "nervous-bus", "lifecycle-emission"),
+			wantCan: "nervous-bus",
+			wantWT:  "lifecycle-emission",
+		},
+		{
+			name:    "nested deeper inside the lane",
+			cwd:     filepath.Join(data2Root, "hearth", "notify-routing", "internal", "hooks"),
+			wantCan: "hearth",
+			wantWT:  filepath.Join("notify-routing", "internal", "hooks"),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			can, wt := Resolve(c.cwd)
+			if can != c.wantCan || wt != c.wantWT {
+				t.Errorf("Resolve(%q) = (%q, %q), want (%q, %q)", c.cwd, can, wt, c.wantCan, c.wantWT)
+			}
+			can2, wt2, ok := IsData2Worktree(c.cwd)
+			if !ok || can2 != c.wantCan || wt2 != c.wantWT {
+				t.Errorf("IsData2Worktree(%q) = (%q, %q, %v), want (%q, %q, true)", c.cwd, can2, wt2, ok, c.wantCan, c.wantWT)
+			}
+		})
+	}
+}
+
+// TestIsData2Worktree_NonMatches pins the cases that must NOT be
+// classified as data2 worktrees: a plain project checkout under the
+// legacy root, and a path outside both roots entirely. A false positive
+// here would misclassify a real interactive session as a dispatched
+// agent and suppress its legitimate notifications.
+func TestIsData2Worktree_NonMatches(t *testing.T) {
+	data2Root := t.TempDir()
+	t.Setenv("HEARTH_HOOK_DATA2_WORKTREES_ROOT", data2Root)
+
+	cases := []struct {
+		name string
+		cwd  string
+	}{
+		{"legacy project checkout", "/home/eric/projects/tengine"},
+		{"legacy nested worktree", "/home/eric/projects/tengine/.claude/worktrees/agent-x"},
+		{"unrelated home path", "/home/eric/Documents/notes"},
+		{"data2 root itself, no project/name segments", data2Root},
+		{"data2 root plus single segment only", filepath.Join(data2Root, "tengine")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, _, ok := IsData2Worktree(c.cwd); ok {
+				t.Errorf("IsData2Worktree(%q) = true, want false", c.cwd)
+			}
+		})
+	}
+}
+
 func TestDisplay(t *testing.T) {
 	cases := []struct {
 		canonical, worktree, want string

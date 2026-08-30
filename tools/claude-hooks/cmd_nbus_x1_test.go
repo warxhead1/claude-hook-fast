@@ -41,6 +41,13 @@ func TestSessionLifecyclePaneID_SubagentGuard(t *testing.T) {
 	t.Setenv("ZELLIJ_SESSION_NAME", "")
 	t.Setenv("ZELLIJ_PANE_ID", "")
 	t.Setenv("TMUX_PANE", "%47")
+	// Isolate from the real EffectiveCWD fallback chain: the HookInput
+	// literals below leave CWD unset, so IsSubagent falls back to
+	// os.Getwd() when CLAUDE_PROJECT_DIR is also unset — which is a
+	// data2 worktree path whenever this test itself runs inside one.
+	// Pin the data2 root to an empty tempdir so that fallback can never
+	// match here.
+	t.Setenv("HEARTH_HOOK_DATA2_WORKTREES_ROOT", t.TempDir())
 
 	// Top-level session (no ParentToolUseID) binds the pane.
 	top := event.HookInput{SessionID: "s1"}

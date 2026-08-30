@@ -164,7 +164,7 @@ func (h HookInput) EffectiveCWD() string {
 //   - subagents claiming their parent's inherited pane in the session
 //     arbiter, making the frozen-but-live parent vanish from the list.
 //
-// Two reliable secondary signals cover the cases parent_tool_use_id misses:
+// Three reliable secondary signals cover the cases parent_tool_use_id misses:
 //
 //  1. Transcript path under a /subagents/ segment
 //     (.../subagents/agent-<hex>.jsonl, or
@@ -172,16 +172,32 @@ func (h HookInput) EffectiveCWD() string {
 //     session's transcript is .../<session-uuid>.jsonl and never does.
 //     Mirrors steeringTargetID's detection in cmd_nbus.go.
 //
-//  2. Effective cwd under an agent-dispatch worktree,
+//  2. Effective cwd under the legacy agent-dispatch worktree layout,
 //     <project>/.claude/worktrees/agent-<hex> (or the .bare/.claude/...
-//     variant). This is the one that catches the observed phantom: a
+//     variant). This is the one that caught the original phantom: a
 //     SubagentStop for a worktree-isolated dispatch carries the PARENT's
 //     session_id AND the PARENT's top-level transcript (so signal 1 misses
 //     it), but its cwd is the worktree Claude Code minted for the dispatch.
-//     That "/.claude/worktrees/agent-" prefix is only ever created for
-//     dispatched agents, never a human checkout, so it is definitive. Without
-//     it, the dispatch surfaces as a phantom "Agent stopped — awaiting input"
-//     ping against the parent and claims the parent's inherited pane.
+//     That "/.claude/worktrees/agent-" prefix was only ever created for
+//     dispatched agents, never a human checkout, so it was definitive.
+//     Retained for pre-2026-08-24 sessions / transcripts, but the 2026-08-24
+//     relocation ruling moved every NEW agent/isolation worktree off this
+//     layout (see signal 3), so this alone stopped catching current
+//     dispatches — the exact same phantom-notification failure mode
+//     recurred until signal 3 was added.
+//
+//  3. Effective cwd under the current (2026-08-24+) data2 worktree
+//     convention, /home/eric/data2/worktrees/<project>/<name>, via
+//     project.IsData2Worktree. <name> may be a dispatch id (agent-<hex>)
+//     or a human-chosen isolated-lane name (board-tab, lifecycle-emission,
+//     notify-routing are real examples) — every path under this root is an
+//     agent/isolation worktree by construction, so the match is on LAYOUT
+//     (root prefix + at least two path segments), never an "agent-"
+//     substring. Without this, every current-convention dispatched agent's
+//     Stop hook falls through to host_claude_code — indistinguishable from
+//     a real interactive session, reintroducing the phantom "Agent
+//     stopped — awaiting input" notification this function exists to
+//     suppress.
 func (h HookInput) IsSubagent() bool {
 	if h.ParentToolUseID != "" {
 		return true
@@ -190,6 +206,9 @@ func (h HookInput) IsSubagent() bool {
 		return true
 	}
 	if strings.Contains(h.EffectiveCWD(), "/.claude/worktrees/agent-") {
+		return true
+	}
+	if _, _, ok := project.IsData2Worktree(h.EffectiveCWD()); ok {
 		return true
 	}
 	return false
