@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------- kscBuildLandmarkArgs ----------
@@ -198,7 +199,21 @@ func TestCmdKbSubagentCapture_RunsLandmarkOnTouchedFiles(t *testing.T) {
 		t.Fatal("expected ack")
 	}
 
-	data, err := os.ReadFile(marker)
+	// kicRunLandmark now fires the `kb landmark` call as a detached
+	// (Setsid, Start-only) child — see cmd_kb_inbox_capture.go — so the
+	// SubagentStop ack above returns before the child necessarily
+	// finishes writing the marker. Poll with a generous bound instead of
+	// asserting immediately.
+	var data []byte
+	var err error
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err = os.ReadFile(marker)
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("expected kb landmark to have been invoked, marker file missing: %v", err)
 	}

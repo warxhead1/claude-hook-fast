@@ -82,6 +82,28 @@ const (
 	// sibling calls run concurrently, so this is close to the true wall
 	// clock budget, not a sum over calls.
 	kpsOverallTimeout = 5 * time.Second
+
+	// kpsCacheTTL bounds how long a per-project cache of the expensive
+	// part of this hook (own `kb prime` output + sibling headlines) is
+	// reused before the next SessionStart pays the real shell-out cost
+	// again. additionalContext is delivered synchronously to the model at
+	// session start — unlike kb-subagent-capture's landmark write, this
+	// output has a reader waiting on it, so it cannot be moved to a
+	// detached background drainer (see kicRunLandmark in
+	// cmd_kb_inbox_capture.go for that pattern, used where the semantics
+	// allow it). Caching is the correctness-preserving alternative:
+	// SessionStart fires once per session, but real sessions cluster in
+	// bursts (an orchestrator dispatching N worktree-isolated sibling
+	// agents within seconds/minutes of each other, or several panes
+	// opened back to back) — the first session in a burst still pays the
+	// full O(vault) `kb prime` cost, every session that starts within
+	// this window reuses that result instead of repeating it. Measured
+	// cost this removes on a hit: p50=1123ms/p95=3944ms/max=4981ms over
+	// 31 SessionStart invocations (~/.cache/hook-timings/claude-hook-fast.jsonl).
+	// 90s is short relative to kpsSiblingFreshness (30m) so sibling
+	// liveness is not the binding staleness concern; it's sized to
+	// absorb a dispatch burst, not to cache "for a while".
+	kpsCacheTTL = 90 * time.Second
 )
 
 // kpsSessionRecord is the subset of ~/.claude/sessions/<pid>.json fields
@@ -360,6 +382,71 @@ func kpsRenderSiblingSection(headlines map[string]string, order []string) string
 	return section
 }
 
+// kpsCacheEntry is the on-disk shape of a cached own-prime + sibling-
+// headlines result, keyed per canonical project (see kpsCacheFile).
+// Deliberately excludes the Live Activity section (kplaLiveActivity) —
+// that's sourced from debug.jsonl directly with no subprocess involved,
+// so it's cheap enough to recompute fresh on every invocation instead of
+// riding along with the expensive part's staleness window.
+type kpsCacheEntry struct {
+	CreatedAt time.Time         `json:"created_at"`
+	OwnOutput string            `json:"own_output"`
+	Headlines map[string]string `json:"headlines"`
+}
+
+// kpsCacheFile returns the cache path for a canonical project, or "" when
+// HOME is unset (mirrors resolveKbBinary's fail-safe-empty convention).
+func kpsCacheFile(project string) string {
+	home := os.Getenv("HOME")
+	if home == "" || project == "" {
+		return ""
+	}
+	safe := strings.ReplaceAll(project, "/", "_")
+	return filepath.Join(home, ".cache", "claude-hook-fast", "kb-prime-siblings", safe+".json")
+}
+
+// kpsLoadCache reads and validates a cache entry for project, returning
+// ok=false on any miss (file absent, unparsable, expired, or empty
+// OwnOutput — an empty own-prime output is never worth caching since the
+// only-own-output early-return in cmdKbPrimeSiblings would otherwise
+// replay "no output" for the full TTL).
+func kpsLoadCache(project string) (kpsCacheEntry, bool) {
+	path := kpsCacheFile(project)
+	if path == "" {
+		return kpsCacheEntry{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return kpsCacheEntry{}, false
+	}
+	var e kpsCacheEntry
+	if err := json.Unmarshal(data, &e); err != nil {
+		return kpsCacheEntry{}, false
+	}
+	if e.OwnOutput == "" || time.Since(e.CreatedAt) > kpsCacheTTL {
+		return kpsCacheEntry{}, false
+	}
+	return e, true
+}
+
+// kpsSaveCache best-effort writes a fresh cache entry for project. Every
+// failure is swallowed — a broken cache write must never surface as a
+// SessionStart problem, it just means the next session pays full cost.
+func kpsSaveCache(project string, e kpsCacheEntry) {
+	path := kpsCacheFile(project)
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, b, 0o644)
+}
+
 // cmdKbPrimeSiblings is the SessionStart hook entry point. See package
 // doc comment for the full design.
 func cmdKbPrimeSiblings() {
@@ -378,37 +465,57 @@ func cmdKbPrimeSiblings() {
 	siblings := kpsSiblingProjects(ownProject)
 
 	var (
-		wg        sync.WaitGroup
-		mu        sync.Mutex
 		ownOutput string
 		headlines = make(map[string]string, len(siblings))
 	)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		out := kpsRunOwnPrime(ctx, binary, ownProject, in.EffectiveCWD())
-		mu.Lock()
-		ownOutput = out
-		mu.Unlock()
-	}()
+	if cached, ok := kpsLoadCache(ownProject); ok {
+		ownOutput = cached.OwnOutput
+		for _, sib := range siblings {
+			if h, ok := cached.Headlines[sib]; ok {
+				headlines[sib] = h
+			}
+		}
+	} else {
+		var (
+			wg sync.WaitGroup
+			mu sync.Mutex
+		)
 
-	if len(siblings) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			callCtx, callCancel := context.WithTimeout(ctx, kpsPerCallTimeout)
-			defer callCancel()
-			results := kpsRunKbPrimeBatch(callCtx, binary, siblings)
+			out := kpsRunOwnPrime(ctx, binary, ownProject, in.EffectiveCWD())
 			mu.Lock()
-			for _, sib := range siblings {
-				headlines[sib] = results[sib].headline()
-			}
+			ownOutput = out
 			mu.Unlock()
 		}()
-	}
 
-	wg.Wait()
+		if len(siblings) > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				callCtx, callCancel := context.WithTimeout(ctx, kpsPerCallTimeout)
+				defer callCancel()
+				results := kpsRunKbPrimeBatch(callCtx, binary, siblings)
+				mu.Lock()
+				for _, sib := range siblings {
+					headlines[sib] = results[sib].headline()
+				}
+				mu.Unlock()
+			}()
+		}
+
+		wg.Wait()
+
+		if ownOutput != "" {
+			kpsSaveCache(ownProject, kpsCacheEntry{
+				CreatedAt: time.Now(),
+				OwnOutput: ownOutput,
+				Headlines: headlines,
+			})
+		}
+	}
 
 	if ownOutput == "" {
 		hooklog.Writef("kb-prime-siblings: own kb prime produced no output for project=%s", ownProject)

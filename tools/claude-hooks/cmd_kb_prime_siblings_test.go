@@ -192,3 +192,81 @@ func TestResolveKbBinary_MissingYieldsEmpty(t *testing.T) {
 		t.Errorf("resolveKbBinary() = %q, want empty", got)
 	}
 }
+
+// ---------- kps cache (kpsLoadCache / kpsSaveCache) ----------
+
+func TestKpsCache_MissWhenAbsent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, ok := kpsLoadCache("some-project"); ok {
+		t.Fatal("expected cache miss for a project with no cache file")
+	}
+}
+
+func TestKpsCache_HitRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	entry := kpsCacheEntry{
+		CreatedAt: time.Now(),
+		OwnOutput: "own prime output",
+		Headlines: map[string]string{"sibling-a": "did a thing"},
+	}
+	kpsSaveCache("proj-x", entry)
+
+	got, ok := kpsLoadCache("proj-x")
+	if !ok {
+		t.Fatal("expected cache hit immediately after save")
+	}
+	if got.OwnOutput != entry.OwnOutput {
+		t.Errorf("OwnOutput = %q, want %q", got.OwnOutput, entry.OwnOutput)
+	}
+	if got.Headlines["sibling-a"] != "did a thing" {
+		t.Errorf("Headlines[sibling-a] = %q, want %q", got.Headlines["sibling-a"], "did a thing")
+	}
+}
+
+func TestKpsCache_ExpiresAfterTTL(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	kpsSaveCache("proj-stale", kpsCacheEntry{
+		CreatedAt: time.Now().Add(-kpsCacheTTL - time.Second),
+		OwnOutput: "stale output",
+	})
+	if _, ok := kpsLoadCache("proj-stale"); ok {
+		t.Fatal("expected cache miss for an entry older than kpsCacheTTL")
+	}
+}
+
+func TestKpsCache_EmptyOwnOutputNeverCounted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	kpsSaveCache("proj-empty", kpsCacheEntry{
+		CreatedAt: time.Now(),
+		OwnOutput: "",
+	})
+	if _, ok := kpsLoadCache("proj-empty"); ok {
+		t.Fatal("expected cache miss when the cached OwnOutput is empty")
+	}
+}
+
+func TestKpsCache_DistinctProjectsIsolated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	kpsSaveCache("proj-a", kpsCacheEntry{CreatedAt: time.Now(), OwnOutput: "a"})
+	kpsSaveCache("proj-b", kpsCacheEntry{CreatedAt: time.Now(), OwnOutput: "b"})
+
+	a, ok := kpsLoadCache("proj-a")
+	if !ok || a.OwnOutput != "a" {
+		t.Errorf("proj-a: got %+v ok=%v, want OwnOutput=a", a, ok)
+	}
+	b, ok := kpsLoadCache("proj-b")
+	if !ok || b.OwnOutput != "b" {
+		t.Errorf("proj-b: got %+v ok=%v, want OwnOutput=b", b, ok)
+	}
+}
+
+func TestKpsCacheFile_EmptyHomeOrProjectYieldsEmpty(t *testing.T) {
+	t.Setenv("HOME", "")
+	if got := kpsCacheFile("proj"); got != "" {
+		t.Errorf("kpsCacheFile with empty HOME = %q, want empty", got)
+	}
+	t.Setenv("HOME", t.TempDir())
+	if got := kpsCacheFile(""); got != "" {
+		t.Errorf("kpsCacheFile with empty project = %q, want empty", got)
+	}
+}

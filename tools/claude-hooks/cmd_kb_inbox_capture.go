@@ -34,7 +34,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,9 +53,6 @@ const (
 	// index.lock under heavy concurrent multi-agent/worktree load, and
 	// Stop hooks have no SIGKILL-swallow net upstream of this binary.
 	kicGitStatusTimeout = 2 * time.Second
-
-	// kicLandmarkTimeout bounds the `kb landmark` shell-out.
-	kicLandmarkTimeout = 3 * time.Second
 
 	// kicMaxFiles caps how many touched-file paths get sent to
 	// `kb landmark --files`, keeping the inbox entry (and the exec argv)
@@ -110,20 +106,24 @@ func kicBuildLandmarkArgs(proj string, files []string) []string {
 	}
 }
 
-// kicRunLandmark shells out to `kb landmark` with the given args.
-// Best-effort: errors are swallowed, nothing is returned or logged on
-// failure (a broken kb binary must never surface as a Stop-hook problem).
+// kicRunLandmark fires `kb landmark` with the given args as a detached
+// child (startDetached, see cmd_nbus.go) and returns immediately without
+// waiting. Best-effort: errors are swallowed, nothing is returned or
+// logged on failure (a broken kb binary must never surface as a Stop or
+// SubagentStop hook problem) — and the call's stdout was never read by
+// either caller (kb-inbox-capture's Stop hook, kb-subagent-capture's
+// SubagentStop hook) even when this ran synchronously, so there is
+// nothing this hook needs to wait for. Measured cost of the previous
+// synchronous osexec.CommandContext+Run (kicLandmarkTimeout=3s bound):
+// kb-inbox-capture p50=44ms/p95=326ms/max=1.6s, kb-subagent-capture
+// p50=72.6ms/p95=635.8ms/max=2.2s over ~840 SubagentStop invocations
+// (~/.cache/hook-timings/claude-hook-fast.jsonl). Detaching removes that
+// entire wait from both hot paths — the child now outlives this process.
 func kicRunLandmark(binary string, args []string) {
 	if binary == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), kicLandmarkTimeout)
-	defer cancel()
-	cmd := osexec.CommandContext(ctx, binary, args...) //nolint:gosec
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = nil
-	_ = cmd.Run()
+	_ = startDetached(binary, args)
 }
 
 // cmdKbInboxCapture is the Stop hook entry point. See package doc
