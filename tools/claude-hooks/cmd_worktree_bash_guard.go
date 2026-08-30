@@ -162,6 +162,7 @@ func bashGuardRules(violations []bashViolation) string {
 // segment and return every violation found. Fail open on anything
 // unparseable.
 func bashGuardViolations(command, startCwd string, isAgent bool) []bashViolation {
+	command = stripHeredocs(command)
 	cwd := startCwd
 	vars := map[string]*string{}
 	setPwd := func() {
@@ -492,6 +493,165 @@ func writerTargets(base string, args []string, cwd string, vars map[string]*stri
 		}
 	}
 	return out
+}
+
+// heredocOp is a `<<[-]TAG` / `<<[-]'TAG'` / `<<[-]"TAG"` operator found
+// outside quotes, recording where its tag ends (idx) so the body that
+// follows on later lines can be located.
+type heredocOp struct {
+	idx  int // index in command right after the tag (and its closing quote)
+	tag  string
+	dash bool // <<- : terminator line may have leading tabs stripped
+}
+
+// heredocOps quote-aware-scans command for heredoc redirect operators
+// (`<<TAG`, `<<-TAG`, `<<'TAG'`, `<<"TAG"`), skipping here-strings (`<<<`)
+// and anything inside single/double quotes. Returned in source order.
+func heredocOps(command string) []heredocOp {
+	var ops []heredocOp
+	inSingle, inDouble := false, false
+	i, n := 0, len(command)
+	for i < n {
+		c := command[i]
+		switch {
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+			i++
+		case inDouble:
+			if c == '\\' && i+1 < n {
+				i += 2
+				continue
+			}
+			if c == '"' {
+				inDouble = false
+			}
+			i++
+		case c == '\\' && i+1 < n:
+			i += 2
+		case c == '\'':
+			inSingle = true
+			i++
+		case c == '"':
+			inDouble = true
+			i++
+		case c == '<' && i+1 < n && command[i+1] == '<' && (i+2 >= n || command[i+2] != '<'):
+			j := i + 2
+			dash := false
+			if j < n && command[j] == '-' {
+				dash = true
+				j++
+			}
+			for j < n && (command[j] == ' ' || command[j] == '\t') {
+				j++
+			}
+			var tag string
+			if j < n && (command[j] == '\'' || command[j] == '"') {
+				q := command[j]
+				j++
+				ts := j
+				for j < n && command[j] != q {
+					j++
+				}
+				tag = command[ts:j]
+				if j < n {
+					j++ // closing quote
+				}
+			} else {
+				ts := j
+				for j < n && !strings.ContainsRune(" \t\n;&|<>", rune(command[j])) {
+					j++
+				}
+				tag = command[ts:j]
+			}
+			if tag != "" {
+				ops = append(ops, heredocOp{idx: j, tag: tag, dash: dash})
+			}
+			i = j
+		default:
+			i++
+		}
+	}
+	return ops
+}
+
+// stripHeredocs removes heredoc BODIES from command (replacing them with
+// nothing) while leaving the operator line itself — including anything
+// else on that same line, such as a trailing ` > file` redirect — intact.
+// Without this, splitShellSegments/shellSplit treat heredoc body lines as
+// ordinary shell text: a read-only SQL query containing `WHERE trade_date
+// >= '2026-08-10'` or `(col->>'Qty')::double precision > 0` piped through a
+// heredoc was parsed as an output redirect to a file literally named `=` or
+// `0`, false-blocking a read-only command (measured 2026-08-30, 58 blocked
+// calls in one session). A genuine redirect placed OUTSIDE the heredoc body
+// (`cat <<EOF > file`) stays on the copied operator line and is still seen.
+func stripHeredocs(command string) string {
+	ops := heredocOps(command)
+	if len(ops) == 0 {
+		return command
+	}
+	var out strings.Builder
+	cursor := 0
+	n := len(command)
+	idx := 0
+	for idx < len(ops) {
+		first := ops[idx]
+		lineEnd := n
+		if nl := strings.IndexByte(command[first.idx:], '\n'); nl != -1 {
+			lineEnd = first.idx + nl + 1
+		}
+		// Multiple heredocs can share one line (`cmd <<A <<B`); their
+		// bodies are consumed in order immediately after that shared line.
+		group := []heredocOp{first}
+		idx++
+		for idx < len(ops) && ops[idx].idx < lineEnd {
+			group = append(group, ops[idx])
+			idx++
+		}
+		if lineEnd > cursor {
+			out.WriteString(command[cursor:lineEnd])
+		}
+		cursor = lineEnd
+		for _, op := range group {
+			cursor = skipHeredocBody(command, cursor, op.tag, op.dash)
+		}
+	}
+	if cursor < n {
+		out.WriteString(command[cursor:])
+	}
+	return out.String()
+}
+
+// skipHeredocBody returns the index just past the heredoc body starting at
+// pos: every line up to and including the one that equals tag exactly
+// (leading tabs stripped first when dash is set, per `<<-`). An unterminated
+// heredoc consumes to the end of the command (fail open elsewhere — there's
+// nothing left to mis-parse as a redirect).
+func skipHeredocBody(command string, pos int, tag string, dash bool) int {
+	n := len(command)
+	for pos < n {
+		nl := strings.IndexByte(command[pos:], '\n')
+		var line string
+		var next int
+		if nl == -1 {
+			line, next = command[pos:], n
+		} else {
+			line, next = command[pos:pos+nl], pos+nl+1
+		}
+		check := line
+		if dash {
+			check = strings.TrimLeft(line, "\t")
+		}
+		if check == tag {
+			return next
+		}
+		if nl == -1 {
+			return n
+		}
+		pos = next
+	}
+	return pos
 }
 
 // redirectTargets resolves output-redirect targets; fd duplication (>&2,

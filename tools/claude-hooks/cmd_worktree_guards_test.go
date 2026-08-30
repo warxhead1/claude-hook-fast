@@ -129,6 +129,22 @@ func TestBashGuardViolations(t *testing.T) {
 		{name: "rm-nonexistent-noop",
 			cmd:   "rm -f no-such-file.tmp",
 			cwd:   f.primary, agent: true, block: false},
+		{name: "heredoc-sql-comparison-operators-not-redirects",
+			cmd: "psql <<EOF\n" +
+				"SELECT * FROM trades WHERE trade_date >= '2026-08-10'\n" +
+				"  AND (yes_levels->0->>'Qty')::double precision > 0;\n" +
+				"EOF\n",
+			cwd: f.primary, agent: true, block: false},
+		{name: "heredoc-quoted-tag-sql",
+			cmd: "psql <<'SQL'\n" +
+				"SELECT 1 WHERE x >= 0;\n" +
+				"SQL\n",
+			cwd: f.primary, agent: true, block: false},
+		{name: "heredoc-dash-tag-indented-terminator",
+			cmd: "cat <<-EOF\n" +
+				"\tvalue >= 5\n" +
+				"\tEOF\n",
+			cwd: f.primary, agent: true, block: false},
 
 		// --- true positives that must survive v2 ---
 		{name: "redirect-into-frozen-primary",
@@ -167,6 +183,11 @@ func TestBashGuardViolations(t *testing.T) {
 		{name: "inline-lift-does-not-unblock-subagent",
 			cmd:   "wave-freeze off " + f.primary + " && git add code.rs",
 			cwd:   f.primary, agent: true, block: true},
+		{name: "heredoc-with-genuine-redirect-outside-body-still-blocks",
+			cmd: "cat <<EOF > " + f.primary + "/out.log\n" +
+				"trade_date >= '2026-08-10'\n" +
+				"EOF\n",
+			cwd: f.scratch, agent: true, block: true},
 
 		// --- allowlist + worktree paths stay open ---
 		{name: "md-write-allowlisted",
