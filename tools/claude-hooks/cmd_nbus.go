@@ -112,6 +112,12 @@ func baseEnvelope(in event.HookInput, eventName, agentKind string) (map[string]a
 		"source_kind":        in.Source,
 		"parent_tool_use_id": in.ParentToolUseID,
 	}
+	// Orca injects ORCA_HISTFILE into every PTY it spawns; a session running
+	// under one is orchestrator-managed, and consumers (hearth) suppress
+	// per-agent stop notifications for it (schema field managed_by).
+	if os.Getenv("ORCA_HISTFILE") != "" {
+		env["managed_by"] = "orca"
+	}
 	return env, can
 }
 
