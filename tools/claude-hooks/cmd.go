@@ -14,13 +14,13 @@ import (
 
 func cmdTmuxPreparing() {
 	if os.Getenv("TMUX") == "" {
-		fmt.Println(`{"decision": undefined}`)
+		fmt.Println(`{}`)
 		return
 	}
 
 	input, ok := hookio.ReadHookInput()
 	if !ok {
-		fmt.Println(`{"decision": undefined}`)
+		fmt.Println(`{}`)
 		return
 	}
 
@@ -39,7 +39,7 @@ func cmdTmuxPreparing() {
 	_ = tmux.UpdateTmuxWindow(statusText, wid, "tmux-preparing")
 
 	appendHookLog(fmt.Sprintf("%s - tmux-preparing: %s\n", timestamp(), statusText))
-	fmt.Println(`{"decision": undefined}`)
+	fmt.Println(`{}`)
 }
 
 func cmdPlanTracker() {
