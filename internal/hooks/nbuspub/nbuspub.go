@@ -78,14 +78,29 @@ func PublishAsync(channel, source, payload string) error {
 	// The worker rebuilds its own child env via Publish → childEnv; the
 	// source tag rides argv, already wrapped by the caller's SourceTag.
 	cmd := exec.Command(exe, WorkerSubcommand, channel, source, payload)
+	if err := StartDetached(cmd); err != nil {
+		return Publish(channel, source, payload)
+	}
+	return nil
+}
+
+// StartDetached starts cmd in its own session with null stdio and reaps it
+// from a background goroutine. Process.Release() is NOT a reap: in a
+// long-lived caller (the codex-hook lease-worker fires one publish per 30s
+// refresh) every Release()d child stayed a zombie for the caller's whole
+// lifetime — ~270 defunct codex-hook processes measured 2026-08-31. The
+// goroutine Wait clears each child within seconds; short-lived hook callers
+// exit first and their children reparent to init/subreaper exactly as before.
+func StartDetached(cmd *exec.Cmd) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
-		return Publish(channel, source, payload)
+		return err
 	}
-	return cmd.Process.Release()
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 func appendAsyncReceipt(channel, source, payload string) error {

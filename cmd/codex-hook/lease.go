@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/warxhead1/claude-hook-fast/internal/hooks/hooklog"
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/nbuspub"
 )
 
 const (
@@ -178,14 +179,7 @@ func startLeaseWorker(id string) error {
 		return err
 	}
 	cmd := exec.Command(exe, "lease-worker", id)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	return cmd.Process.Release()
+	return nbuspub.StartDetached(cmd)
 }
 func loadLease(path string) (leaseState, error) {
 	var s leaseState
