@@ -121,14 +121,12 @@ func Load() (WorkerPolicy, error) {
 }
 
 var (
-	commandSplitRE = regexp.MustCompile(`(?:\r?\n|;|&&|\|\||\|)`)
-	workerStartRE  = regexp.MustCompile(`(?i)^\s*(?:(?:env|command|sudo)\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:["']?[^\s"']*/)?orca(?:-ide)?["']?\s+orchestration\s+worker-start(?:\s|$)`)
+	workerStartRE = regexp.MustCompile(`(?i)^\s*(?:(?:env|command|sudo)\s+)*(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:["']?[^\s"']*/)?orca(?:-ide)?["']?\s+orchestration\s+worker-start(?:\s|$)`)
 )
 
 func InspectCommand(command string, policy WorkerPolicy) []Violation {
-	command = strings.ReplaceAll(command, "\\\n", " ")
 	var violations []Violation
-	for _, segment := range commandSplitRE.Split(command, -1) {
+	for _, segment := range splitShellCommands(command) {
 		segment = strings.TrimSpace(segment)
 		if !workerStartRE.MatchString(segment) {
 			continue
@@ -169,6 +167,67 @@ func InspectCommand(command string, policy WorkerPolicy) []Violation {
 		}
 	}
 	return violations
+}
+
+// splitShellCommands separates the shell control operators relevant to command
+// chaining without treating operators inside quoted arguments as boundaries. It
+// deliberately does not attempt to execute or fully parse shell syntax.
+func splitShellCommands(command string) []string {
+	segments := make([]string, 0, 1)
+	start := 0
+	var quote byte
+
+	split := func(end, next int) {
+		segments = append(segments, command[start:end])
+		start = next
+	}
+
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+		if quote != '\'' && c == '\\' {
+			if i+1 < len(command) {
+				i++ // escaped characters, including a continued newline, are not operators
+			}
+			continue
+		}
+		if c == '\'' || c == '"' {
+			if quote == 0 {
+				quote = c
+			} else if quote == c {
+				quote = 0
+			}
+			continue
+		}
+		if quote != 0 {
+			continue
+		}
+
+		switch c {
+		case ';', '\n':
+			split(i, i+1)
+		case '\r':
+			if i+1 < len(command) && command[i+1] == '\n' {
+				split(i, i+2)
+				i++
+			}
+		case '&':
+			if i+1 < len(command) && command[i+1] == '&' {
+				split(i, i+2)
+				i++
+			} else {
+				split(i, i+1)
+			}
+		case '|':
+			next := i + 1
+			if next < len(command) && (command[next] == '|' || command[next] == '&') {
+				next++
+			}
+			split(i, next)
+			i = next - 1
+		}
+	}
+	segments = append(segments, command[start:])
+	return segments
 }
 
 func hasEnvOptIn(command string, restriction ModelRestriction) bool {

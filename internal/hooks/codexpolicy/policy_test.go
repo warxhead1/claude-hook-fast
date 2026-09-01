@@ -35,6 +35,18 @@ func TestInspectCommand(t *testing.T) {
 		{"unrelated text unaffected", "echo orca-ide orchestration worker-start --agent codex", false, ""},
 		{"chained unsafe launch", "true && orca orchestration worker-start --agent codex", true, "explicit --model"},
 		{"environment prefix", "env TRACE=1 orca-ide orchestration worker-start --agent codex --model 'gpt-5.6-luna'", false, ""},
+		{"single quoted semicolon in flag", "orca-ide orchestration worker-start --comment 'bounded; no writes' --agent codex --model gpt-5.6-terra", false, ""},
+		{"double quoted semicolon in flag", "orca-ide orchestration worker-start --comment \"bounded; no writes\" --agent codex --model gpt-5.6-terra", false, ""},
+		{"double quoted and in flag", "orca-ide orchestration worker-start --comment \"bounded && no writes\" --agent codex --model gpt-5.6-terra", false, ""},
+		{"single quoted and in flag", "orca-ide orchestration worker-start --comment 'bounded && no writes' --agent codex --model gpt-5.6-terra", false, ""},
+		{"single quoted or in flag", "orca-ide orchestration worker-start --comment 'bounded || no writes' --agent codex --model gpt-5.6-terra", false, ""},
+		{"double quoted or in flag", "orca-ide orchestration worker-start --comment \"bounded || no writes\" --agent codex --model gpt-5.6-terra", false, ""},
+		{"double quoted pipe in flag", "orca-ide orchestration worker-start --comment \"bounded | no writes\" --agent codex --model gpt-5.6-terra", false, ""},
+		{"single quoted pipe in flag", "orca-ide orchestration worker-start --comment 'bounded | no writes' --agent codex --model gpt-5.6-terra", false, ""},
+		{"semicolon chained unsafe launch", "true; orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
+		{"and chained unsafe launch", "true && orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
+		{"or chained unsafe launch", "false || orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
+		{"pipe chained unsafe launch", "printf ok | orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
