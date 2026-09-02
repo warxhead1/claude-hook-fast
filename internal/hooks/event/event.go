@@ -234,5 +234,22 @@ func PaneIDQualified() string {
 	if p := os.Getenv("TMUX_PANE"); p != "" {
 		return "tmux:" + p
 	}
+	if h := OrcaTerminalHandle(); h != "" {
+		return "orca:" + h
+	}
 	return ""
+}
+
+// OrcaTerminalHandle returns the Orca ADE terminal handle (`term_<uuid>`)
+// this hook is running inside, or "" outside Orca. Orca injects
+// ORCA_TERMINAL_HANDLE into every PTY it spawns. A Claude Code session in one
+// has no TMUX_PANE, so without this the PermissionRequest hook published an
+// empty pane_id and hearth dropped the prompt on arrival ("missing
+// correlation_id or pane_id") — hearth issue #121.
+func OrcaTerminalHandle() string {
+	h := os.Getenv("ORCA_TERMINAL_HANDLE")
+	if !strings.HasPrefix(h, "term_") || strings.ContainsAny(h, " \t\n") {
+		return ""
+	}
+	return h
 }

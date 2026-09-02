@@ -115,7 +115,7 @@ func baseEnvelope(in event.HookInput, eventName, agentKind string) (map[string]a
 	// Orca injects ORCA_HISTFILE into every PTY it spawns; a session running
 	// under one is orchestrator-managed, and consumers (hearth) suppress
 	// per-agent stop notifications for it (schema field managed_by).
-	if os.Getenv("ORCA_HISTFILE") != "" {
+	if os.Getenv("ORCA_HISTFILE") != "" || event.OrcaTerminalHandle() != "" {
 		env["managed_by"] = "orca"
 	}
 	return env, can
@@ -614,7 +614,15 @@ func paneIDForArbiter() string {
 	if s, p := os.Getenv("ZELLIJ_SESSION_NAME"), os.Getenv("ZELLIJ_PANE_ID"); s != "" && p != "" {
 		return "zellij:" + s + ":" + p
 	}
-	return os.Getenv("TMUX_PANE")
+	if p := os.Getenv("TMUX_PANE"); p != "" {
+		return p
+	}
+	// Orca terminals are addressable panes too (hearth sends/captures via the
+	// orca CLI); the qualified form is the only form, there is no bare one.
+	if h := event.OrcaTerminalHandle(); h != "" {
+		return "orca:" + h
+	}
+	return ""
 }
 
 // steeringTargetID returns the id this hook invocation should poll/steer
@@ -1052,6 +1060,23 @@ func cmdNbusPermissionRequest() {
 		"deep_link":  "session://" + in.SessionID,
 		"ts":         now.Format(time.RFC3339Nano),
 		"expires_at": expires.Format(time.RFC3339Nano),
+		// Rich-card fields (hearth issue #121). prompt_text is schema-capped
+		// at 600 chars; these carry the whole request so the phone can show
+		// the FULL command, the agent's stated intent, and who is asking.
+		"agent_kind":         in.AgentKind(),
+		"parent_tool_use_id": in.ParentToolUseID,
+		"cwd":                in.EffectiveCWD(),
+	}
+	if h := event.OrcaTerminalHandle(); h != "" {
+		env["managed_by"] = "orca"
+		env["orca_terminal"] = h
+		env["orca_worktree_id"] = os.Getenv("ORCA_WORKTREE_ID")
+		env["orca_tab_id"] = os.Getenv("ORCA_TAB_ID")
+	} else if os.Getenv("ORCA_HISTFILE") != "" {
+		env["managed_by"] = "orca"
+	}
+	for k, v := range permissionRichFields(in.ToolName, in.ToolInput) {
+		env[k] = v
 	}
 	publishNbusEnvelope(chanPermissionRequested, env, can)
 	hooklog.Writef("nbus-permission-request: published corr=%s session=%s tool=%s pane=%s",
@@ -1161,6 +1186,67 @@ func cmdNbusSubagentLifecycle() {
 // extractToolAction returns (summary, fullDetail) for a permission prompt.
 // summary is a short actionable label for the notification title/watch chip.
 // fullDetail is the full command/path shown in the notification body and watch card.
+// permissionRichFieldsMax bounds the untruncated payload fields. Redis stream
+// entries and the hearth notifications row both hold this comfortably; a
+// heredoc-heavy Bash call is a few KB, a Write of a whole file can be more.
+const permissionRichFieldsMax = 16 * 1024
+
+// permissionRichFields returns the full-fidelity companions to
+// extractToolAction's truncated summary/detail: `command_full` (the whole
+// Bash command / file path / URL — whatever the tool acts on),
+// `description` (the model's own one-line intent, which Claude Code attaches
+// to Bash calls and which hearth renders as "Intent:"), and `tool_input`
+// (the raw input object) — each only when non-empty and within the cap.
+func permissionRichFields(toolName string, rawInput json.RawMessage) map[string]any {
+	out := map[string]any{}
+	if len(rawInput) == 0 {
+		return out
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rawInput, &m); err != nil {
+		return out
+	}
+	str := func(key string) string {
+		v, _ := m[key].(string)
+		return v
+	}
+	var full string
+	switch toolName {
+	case "Bash":
+		full = str("command")
+	case "Edit", "MultiEdit", "Write", "Read", "NotebookEdit":
+		full = str("file_path")
+		if full == "" {
+			full = str("path")
+		}
+	case "WebFetch", "WebSearch":
+		full = str("url")
+		if full == "" {
+			full = str("query")
+		}
+	default:
+		if c := str("command"); c != "" {
+			full = c
+		}
+	}
+	if full != "" {
+		if len(full) > permissionRichFieldsMax {
+			full = full[:permissionRichFieldsMax]
+			out["command_full_truncated"] = true
+		}
+		out["command_full"] = full
+	}
+	if d := strings.TrimSpace(str("description")); d != "" {
+		out["description"] = truncate(d, 300)
+	}
+	if len(rawInput) <= permissionRichFieldsMax {
+		out["tool_input"] = json.RawMessage(rawInput)
+	} else {
+		out["tool_input_truncated"] = true
+	}
+	return out
+}
+
 func extractToolAction(toolName string, rawInput json.RawMessage) (summary, detail string) {
 	if len(rawInput) == 0 {
 		return toolName, toolName

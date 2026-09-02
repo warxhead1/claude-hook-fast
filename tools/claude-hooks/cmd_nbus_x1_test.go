@@ -27,10 +27,29 @@ func TestPaneIDForArbiter(t *testing.T) {
 			t.Fatalf("zellij: got %q want %q", got, "zellij:sess:3")
 		}
 	})
+	t.Run("orca terminal when no multiplexer", func(t *testing.T) {
+		t.Setenv("ZELLIJ_SESSION_NAME", "")
+		t.Setenv("ZELLIJ_PANE_ID", "")
+		t.Setenv("TMUX_PANE", "")
+		t.Setenv("ORCA_TERMINAL_HANDLE", "term_abc")
+		if got := paneIDForArbiter(); got != "orca:term_abc" {
+			t.Fatalf("orca: got %q want %q", got, "orca:term_abc")
+		}
+	})
+	t.Run("tmux wins over orca", func(t *testing.T) {
+		t.Setenv("ZELLIJ_SESSION_NAME", "")
+		t.Setenv("ZELLIJ_PANE_ID", "")
+		t.Setenv("TMUX_PANE", "%9")
+		t.Setenv("ORCA_TERMINAL_HANDLE", "term_abc")
+		if got := paneIDForArbiter(); got != "%9" {
+			t.Fatalf("tmux-over-orca: got %q", got)
+		}
+	})
 	t.Run("neither multiplexer present", func(t *testing.T) {
 		t.Setenv("ZELLIJ_SESSION_NAME", "")
 		t.Setenv("ZELLIJ_PANE_ID", "")
 		t.Setenv("TMUX_PANE", "")
+		t.Setenv("ORCA_TERMINAL_HANDLE", "")
 		if got := paneIDForArbiter(); got != "" {
 			t.Fatalf("none: got %q want empty", got)
 		}

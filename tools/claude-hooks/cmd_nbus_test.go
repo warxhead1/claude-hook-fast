@@ -166,6 +166,7 @@ func TestBaseEnvelope_StampsManagedByOrca(t *testing.T) {
 	in := event.HookInput{SessionID: "s-orca", CWD: t.TempDir(), TranscriptPath: "/tmp/conv-oo.jsonl"}
 
 	t.Setenv("ORCA_HISTFILE", "")
+	t.Setenv("ORCA_TERMINAL_HANDLE", "")
 	env, _ := baseEnvelope(in, "turn_end", "host_claude_code")
 	if _, ok := env["managed_by"]; ok {
 		t.Errorf("managed_by should be absent without ORCA_HISTFILE, env = %+v", env)
