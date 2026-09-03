@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      gomod-minor-patch:
+        update-types: [minor, patch]
+      gomod-major:
+        update-types: [major]
+    labels: [dependencies, go]
