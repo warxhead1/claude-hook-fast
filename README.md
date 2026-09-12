@@ -42,12 +42,19 @@ release validation should also use a real subprocess measurement (the current
 Every Orca worker launch must name its agent; Codex workers must name exactly one
 allowed model. Luna and Terra are directly allowed. Sol remains available for
 exceptional work but requires the additional explicit launch prefix
-`CODEX_ALLOW_SOL_WORKER=1`. Unknown models, missing models, duplicate model flags,
-and unacknowledged Sol launches are denied using Codex's native
-`permissionDecision: deny` response. A missing installed policy uses the embedded
+`CODEX_ALLOW_SOL_WORKER=1`. Astra workers likewise require
+`CODEX_ALLOW_ASTRA_WORKER=1`; this restriction applies to supervised Orca worker
+launches, not ordinary primary Codex sessions. Unknown models, missing models,
+duplicate model flags, and unacknowledged Astra or Sol launches are denied using
+Codex's native `permissionDecision: deny` response. A missing installed policy uses the embedded
 restrictive default; a malformed installed policy fails closed.
 
-Install or audit the host-wide Luna default, managed `~/.codex/AGENTS.md` policy,
+The managed host default is `gpt-6-astra`. The active agent implements and
+validates work directly; independent Luna reviews and bounded MMX/Terra slices
+are optional when their benefit outweighs handoff and review cost. Testability
+or a cheaper available model alone is not a reason to delegate implementation.
+
+Install or audit the host-wide Astra default, managed `~/.codex/AGENTS.md` policy,
 data-driven worker allowlist, and enforcing hook with:
 
 ```bash

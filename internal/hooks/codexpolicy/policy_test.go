@@ -9,8 +9,8 @@ import (
 
 func TestDefaultPolicyIsValid(t *testing.T) {
 	p := Default()
-	if p.DefaultModel != "gpt-5.6-luna" || p.ReadOnlyModel != "gpt-5.6-luna" {
-		t.Fatalf("unexpected cheap defaults: %+v", p)
+	if p.DefaultModel != "gpt-6-astra" || p.ReadOnlyModel != "gpt-5.6-luna" {
+		t.Fatalf("unexpected primary and read-only defaults: %+v", p)
 	}
 }
 
@@ -24,6 +24,12 @@ func TestInspectCommand(t *testing.T) {
 	}{
 		{"luna allowed", "orca-ide orchestration worker-start --task t --agent codex --model gpt-5.6-luna --json", false, ""},
 		{"terra allowed", "orca-ide orchestration worker-start --agent=codex --model=gpt-5.6-terra", false, ""},
+		{"astra requires opt in", "orca-ide orchestration worker-start --agent codex --model gpt-6-astra", true, "CODEX_ALLOW_ASTRA_WORKER=1"},
+		{"astra explicitly allowed", "CODEX_ALLOW_ASTRA_WORKER=1 orca-ide orchestration worker-start --agent codex --model gpt-6-astra", false, ""},
+		{"astra env explicitly allowed", "env CODEX_ALLOW_ASTRA_WORKER='1' orca-ide orchestration worker-start --agent codex --model gpt-6-astra", false, ""},
+		{"astra wrong opt in rejected", "CODEX_ALLOW_ASTRA_WORKER=0 orca-ide orchestration worker-start --agent codex --model gpt-6-astra", true, "CODEX_ALLOW_ASTRA_WORKER=1"},
+		{"astra sol opt in insufficient", "CODEX_ALLOW_SOL_WORKER=1 orca-ide orchestration worker-start --agent codex --model gpt-6-astra", true, "CODEX_ALLOW_ASTRA_WORKER=1"},
+		{"primary astra session unaffected", "codex --model gpt-6-astra", false, ""},
 		{"sol requires opt in", "orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol", true, "CODEX_ALLOW_SOL_WORKER=1"},
 		{"sol explicitly allowed", "CODEX_ALLOW_SOL_WORKER=1 orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol", false, ""},
 		{"sol env explicitly allowed", "env CODEX_ALLOW_SOL_WORKER='1' orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol", false, ""},

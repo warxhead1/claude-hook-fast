@@ -7,19 +7,19 @@ import (
 	"testing"
 )
 
-func TestRenderConfigSetsCheapDefaultAndAddsHook(t *testing.T) {
-	in := []byte("# keep\nmodel = \"gpt-5.6-sol\"\n[notice]\nhide = true\n")
-	got, err := renderConfig(in, "gpt-5.6-luna", "/opt/bin/codex-hook")
+func TestRenderConfigSetsAstraDefaultAndAddsHook(t *testing.T) {
+	in := []byte("# keep\nmodel = \"gpt-5.6-luna\"\nmodel_reasoning_effort = \"max\"\n[notice]\nhide = true\n")
+	got, err := renderConfig(in, "gpt-6-astra", "/opt/bin/codex-hook")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(got)
-	for _, want := range []string{"# keep", `model = "gpt-5.6-luna"`, "hide = true", `command = "/opt/bin/codex-hook pre-tool"`} {
+	for _, want := range []string{"# keep", `model = "gpt-6-astra"`, `model_reasoning_effort = "max"`, "hide = true", `command = "/opt/bin/codex-hook pre-tool"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
 		}
 	}
-	second, err := renderConfig(got, "gpt-5.6-luna", "/opt/bin/codex-hook")
+	second, err := renderConfig(got, "gpt-6-astra", "/opt/bin/codex-hook")
 	if err != nil || string(second) != text {
 		t.Fatalf("render not idempotent: %v\n%s", err, second)
 	}
