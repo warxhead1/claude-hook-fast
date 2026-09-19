@@ -733,8 +733,11 @@ func steeringCommandText(cmd map[string]any) string {
 //
 //	{"systemMessage": "⚡ Steering: <text>\n<text2>"}
 //
-// Best-effort: daemon down or 404 → silent. Timeout=1s enforced by the
-// settings.json hook entry; hook must exit quickly to not delay tool use.
+// Best-effort: daemon down or 404 → silent. Leave headroom inside the host's
+// 1s hook budget for startup, scheduling and output. The shared HTTP client's
+// 1.5s timeout exceeds that entire outer budget.
+const steeringPollTimeout = 500 * time.Millisecond
+
 func cmdSteeringPoll() {
 	in, _ := readStdinForHook()
 	if in.SessionID == "" {
@@ -747,7 +750,9 @@ func cmdSteeringPoll() {
 	since := readSteeringCursor(targetID)
 	pollURL := fmt.Sprintf("%s/api/v2/sessions/%s/commands?since=%d",
 		hearthLoomURL(), targetID, since)
-	req, err := http.NewRequest(http.MethodGet, pollURL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), steeringPollTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
 	if err != nil {
 		return
 	}
@@ -758,7 +763,10 @@ func cmdSteeringPoll() {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return // Never acknowledge commands from a timed-out partial body.
+	}
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusServiceUnavailable {
 		// Endpoint not yet live or store not wired — silent to keep the hook lean.
 		return

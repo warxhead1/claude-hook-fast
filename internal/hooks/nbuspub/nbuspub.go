@@ -20,7 +20,6 @@ package nbuspub
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -56,30 +55,34 @@ const PublishTimeout = 5 * time.Second
 // the detached publish worker spawned by PublishAsync.
 const WorkerSubcommand = "nbus-publish-worker"
 
-// PublishAsync spawns the current binary as a detached worker
-// (`<self> nbus-publish-worker <channel> <source> <payload>`, own
-// session, null stdio) and returns immediately. The hook path pays
-// fork+exec (~5-10ms) instead of the full nervous/redis round-trip,
-// which routinely exceeded the 2s hook budget Codex allows. Falls back
-// to the synchronous Publish only when the re-exec itself fails.
+// PublishAsync appends a buffered receipt and starts a detached worker with
+// null stdio. A successful return is NOT a durability acknowledgement: the
+// worker syncs the inherited descriptor before sending to Redis. Start errors
+// leave the buffered receipt for the mirror, without synchronous CLI fallback.
 func PublishAsync(channel, source, payload string) error {
-	// Fsynced pre-detach debug receipt: a crash between fork and worker start
-	// leaves replayable evidence. This is a backstop, not an acknowledged outbox.
-	if err := appendAsyncReceipt(channel, source, payload); err != nil {
-		hooklog.Writef("nbus-async receipt channel=%s err=%v", channel, err)
-		// Preserve direct delivery's durable-before-Redis contract when the
-		// outbox is unavailable rather than detaching an unrecoverable event.
-		return PublishDirect(channel, source, payload)
-	}
-	exe, err := os.Executable()
+	return publishAsync(channel, source, payload, os.Executable, StartDetached)
+}
+
+func publishAsync(channel, source, payload string, executable func() (string, error), start func(*exec.Cmd) error) error {
+	raw, err := prepareEnvelope(channel, source, payload)
 	if err != nil {
-		return Publish(channel, source, payload)
+		return err
 	}
-	// The worker rebuilds its own child env via Publish → childEnv; the
-	// source tag rides argv, already wrapped by the caller's SourceTag.
-	cmd := exec.Command(exe, WorkerSubcommand, channel, source, payload)
-	if err := StartDetached(cmd); err != nil {
-		return Publish(channel, source, payload)
+	receipt, err := openDebugReceipt(raw)
+	if err != nil {
+		return fmt.Errorf("nbus-async receipt: %w", err)
+	}
+	defer func() { _ = receipt.Close() }()
+	exe, err := executable()
+	if err != nil {
+		return fmt.Errorf("nbus-async executable: %w", err)
+	}
+	// fd 3 keeps the appended inode alive across rotation. Reopening the path
+	// in the worker could sync an unrelated, newly created debug.jsonl.
+	cmd := exec.Command(exe, WorkerSubcommand, receiptWorkerMode, "3", string(raw))
+	cmd.ExtraFiles = []*os.File{receipt}
+	if err := start(cmd); err != nil {
+		return fmt.Errorf("nbus-async start: %w", err)
 	}
 	return nil
 }
@@ -103,29 +106,24 @@ func StartDetached(cmd *exec.Cmd) error {
 	return nil
 }
 
-func appendAsyncReceipt(channel, source, payload string) error {
-	if channel == "" || !json.Valid([]byte(payload)) {
-		return fmt.Errorf("invalid channel/payload")
-	}
-	env := envelope{SpecVersion: "1.0", ID: semanticEventID(payload), Source: source, Type: channel, Time: time.Now().UTC().Format("2006-01-02T15:04:05Z"), DataContentType: "application/json", Data: json.RawMessage(payload)}
-	raw, err := json.Marshal(env)
-	if err != nil {
-		return err
-	}
-	if !appendDebugLog(raw) {
-		return fmt.Errorf("durable receipt unavailable")
-	}
-	return nil
-}
-
-// WorkerMain is the detached-worker entry point. Direct Go delivery
-// first (~2-5ms, zero interpreter spawns — see direct.go); the nervous
-// CLI (bounded, hooklog-on-failure) only as fallback, e.g. an authed
-// redis URL or an unusable payload.
+// WorkerMain syncs an inherited receipt before exact-envelope delivery.
+// The legacy channel/source/payload form retains its CLI fallback.
 func WorkerMain(args []string) {
 	if len(args) != 3 {
 		return
 	}
+	if args[0] == receiptWorkerMode {
+		if args[1] != "3" {
+			return
+		}
+		receipt := os.NewFile(3, "nbus-receipt")
+		defer func() { _ = receipt.Close() }()
+		if err := syncAndDeliverReceipt(receipt, []byte(args[2])); err != nil {
+			hooklog.Writef("nbus-async worker err=%v", err)
+		}
+		return
+	}
+	// Legacy direct-worker form; new callers use the exact-envelope form.
 	if err := publishDirect(args[0], args[1], args[2], false); err != nil {
 		hooklog.Writef("nbus-direct fallback channel=%s err=%v", args[0], err)
 		_ = Publish(args[0], args[1], args[2])

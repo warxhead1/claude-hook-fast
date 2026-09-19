@@ -56,8 +56,7 @@ func TestStartDetachedReapsChild(t *testing.T) {
 	t.Fatalf("child %d still state %q after 5s — StartDetached did not reap it", pid, procState(pid))
 }
 
-// StartDetached must surface a start failure so callers can fall back to
-// synchronous delivery.
+// StartDetached must surface a start failure so callers can diagnose it.
 func TestStartDetachedStartError(t *testing.T) {
 	cmd := exec.Command("/nonexistent-binary-for-nbuspub-test")
 	if err := StartDetached(cmd); err == nil {

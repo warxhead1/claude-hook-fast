@@ -46,8 +46,9 @@ func PublishDirect(channel, source, payload string) error {
 	return publishDirect(channel, source, payload, true)
 }
 
-// publishDirect can reuse the pre-detach outbox receipt created by
-// PublishAsync. Direct callers still append their own durable receipt.
+// publishDirect retains the legacy worker's receipt reuse option. Direct
+// callers append and sync their own receipt; new asynchronous workers use
+// syncAndDeliverReceipt to preserve the exact recorded envelope.
 func publishDirect(channel, source, payload string, appendReceipt bool) error {
 	if channel == "" || !json.Valid([]byte(payload)) {
 		return fmt.Errorf("nbuspub direct: invalid channel/payload")
@@ -100,30 +101,41 @@ func ulidish() string {
 }
 
 func appendDebugLog(raw []byte) bool {
+	f, err := openDebugReceipt(raw)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	return debugLogSync(f) == nil
+}
+
+// openDebugReceipt appends without syncing. The caller owns the descriptor
+// and chooses where the durability wait belongs (direct caller or worker).
+func openDebugReceipt(raw []byte) (*os.File, error) {
 	path := os.Getenv("NERVOUS_DEBUG_LOG")
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return false
+			return nil, err
 		}
 		path = filepath.Join(home, ".cache", "nervous-bus", "debug.jsonl")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false
+		return nil, err
 	}
 	if st, err := os.Stat(path); err == nil && st.Size() > debugLogMaxBytes {
 		_ = os.Rename(path, path+".1")
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return false
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
 	_, err = f.Write(append(raw, '\n'))
 	if err != nil {
-		return false
+		_ = f.Close()
+		return nil, err
 	}
-	return debugLogSync(f) == nil
+	return f, nil
 }
 
 // redisAddr resolves NERVOUS_REDIS_URL (default redis://localhost:6379)

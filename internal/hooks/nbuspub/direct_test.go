@@ -137,11 +137,11 @@ func TestPublishDirectRedisDownIsDurable(t *testing.T) {
 	}
 }
 
-func TestAsyncReceiptIsDurableBeforeWorker(t *testing.T) {
+func TestDirectReceiptIsSynced(t *testing.T) {
 	log := t.TempDir() + "/debug.jsonl"
 	t.Setenv("NERVOUS_DEBUG_LOG", log)
-	if err := appendAsyncReceipt("bus.test.v1", "/s", `{"event_id":"receipt-id"}`); err != nil {
-		t.Fatal(err)
+	if !appendDebugLog([]byte(`{"event_id":"receipt-id"}`)) {
+		t.Fatal("receipt append failed")
 	}
 	b, err := os.ReadFile(log)
 	if err != nil {
@@ -152,12 +152,12 @@ func TestAsyncReceiptIsDurableBeforeWorker(t *testing.T) {
 	}
 }
 
-func TestAsyncReceiptRequiresSync(t *testing.T) {
+func TestDirectReceiptRequiresSync(t *testing.T) {
 	old := debugLogSync
 	defer func() { debugLogSync = old }()
 	debugLogSync = func(*os.File) error { return os.ErrInvalid }
 	t.Setenv("NERVOUS_DEBUG_LOG", t.TempDir()+"/debug.jsonl")
-	if err := appendAsyncReceipt("bus.test.v1", "/s", `{"event_id":"sync"}`); err == nil {
+	if appendDebugLog([]byte(`{"event_id":"sync"}`)) {
 		t.Fatal("unsynced receipt was accepted")
 	}
 }

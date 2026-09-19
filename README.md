@@ -30,12 +30,28 @@ qualified `tmux:%N` or `zellij:<session>:<pane>` binding, and explicit child
 `agent_id`/`agent_type`; subagents never claim the parent pane. Tool payloads are
 redacted and bounded. A single detached, PID-starttime-validated lease worker
 refreshes the root binding about every 30 seconds and exits on terminal cleanup,
-stale parent, or six minutes without a hook refresh. Direct nbus delivery fsyncs
-a pre-detach debug receipt/backstop before Redis; it is not an acknowledged outbox.
+stale parent, or six minutes without a hook refresh. Both hook binaries append
+a buffered debug receipt before starting a detached bus worker. The worker
+inherits that open file, fsyncs it, and sends the exact recorded envelope to
+Redis. Rotation cannot make it sync a different file, and the receipt and Redis
+event share one ID and timestamp even when the payload has no `event_id`.
+
+Hook return acknowledges the append and worker launch, **not durable storage or
+delivery**. A host crash before the worker syncs can lose the buffered receipt.
+The mirror may also observe the append before that sync; this is a best-effort
+telemetry backstop, not an acknowledged outbox. Receipt or worker-start errors
+are logged without synchronous network/CLI fallback; a failed worker sync never
+sends to Redis. A Redis failure leaves the synced receipt for the mirror.
+This keeps slow disk flushes outside the interactive hook's timeout budget.
 The six-minute timeout only bounds an idle lease worker; it is not evidence that a
 Codex session ended. The deterministic unit test bounds in-process work, while
 release validation should also use a real subprocess measurement (the current
-50-hook host measurement is about 3.02 ms average including fsync and fork).
+50-hook historical host measurement was about 3.02 ms average; repeat it under
+current host load rather than treating it as a latency guarantee).
+
+Claude's `steering-poll` uses one 500 ms deadline for both response headers and
+body, leaving headroom inside its configured 1 s hook timeout. An incomplete
+response never advances the steering cursor.
 
 `PreToolUse` additionally enforces the versioned worker-model policy in
 [`internal/hooks/codexpolicy/worker-policy.json`](internal/hooks/codexpolicy/worker-policy.json).
