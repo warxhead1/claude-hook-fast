@@ -51,7 +51,11 @@ type HookInput struct {
 	MessageText string `json:"message_text"`
 	IsPartial   bool   `json:"is_partial"`
 
-	// StopFailure hook fields.
+	// StopFailure hook fields. Claude Code supplies the human-readable failure
+	// context in `error`; it does not supply a typed cause in the sampled
+	// payloads. The legacy fields remain for compatibility with any older
+	// wrapper that did send them.
+	Error        string `json:"error"`
 	ErrorType    string `json:"error_type"`
 	ErrorMessage string `json:"error_message"`
 

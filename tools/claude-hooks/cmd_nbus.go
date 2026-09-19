@@ -1122,21 +1122,13 @@ func cmdNbusMessageDisplay() {
 
 // cmdNbusStopFailure handles StopFailure — API error at turn end.
 //
-// `error_type` and `error_message` were named on assumption, never against a
-// captured payload. Claude Code's documented StopFailure matcher filters on an
-// error type drawn from a fixed set (rate_limit, overloaded,
-// authentication_failed, oauth_org_not_allowed, billing_error,
-// invalid_request, model_not_found, server_error, max_output_tokens, unknown),
-// but both fields have been arriving empty — publishNbusEnvelope strips empty
-// strings, so the published event carried no error information at all, and
-// hearth-api's consumer substituted its own "unknown"/"" placeholders and
-// pushed those to the phone as if they were the error.
-//
-// Trace the raw payload so the true key names are recoverable from
-// ~/.claude/hooks/log/hook-trace.jsonl instead of guessed at again.
+// Claude Code supplies StopFailure context in a top-level `error` string. Its
+// sampled payloads do not carry a typed cause, so preserve `unknown` rather
+// than deriving one from the message or session labels.
 func cmdNbusStopFailure() {
 	in, raw := readStdinForHook()
 	traceNote("raw_head", truncate(string(raw), 600))
+	traceNote("parsed_error", in.Error)
 	traceNote("parsed_error_type", in.ErrorType)
 	traceNote("parsed_error_message", in.ErrorMessage)
 	if in.SessionID == "" {
@@ -1144,9 +1136,24 @@ func cmdNbusStopFailure() {
 	}
 	can, _ := project.Resolve(in.EffectiveCWD())
 	env, _ := baseEnvelope(in, "stop_failure", in.AgentKind())
-	env["error_type"] = in.ErrorType
-	env["error_message"] = in.ErrorMessage
+	errorType, errorMessage := stopFailureFields(in)
+	env["error_type"] = errorType
+	env["error_message"] = errorMessage
 	publishNbusEnvelope(chanSessionError, env, can)
+}
+
+// stopFailureFields maps the observed payload without inferring a typed cause.
+// `error_message` is retained as a legacy fallback for old wrapper payloads.
+func stopFailureFields(in event.HookInput) (errorType, errorMessage string) {
+	errorType = in.ErrorType
+	if errorType == "" {
+		errorType = "unknown"
+	}
+	errorMessage = in.Error
+	if errorMessage == "" {
+		errorMessage = in.ErrorMessage
+	}
+	return errorType, errorMessage
 }
 
 // cmdNbusSessionEnd handles SessionEnd — session terminated (vs Stop = turn end).

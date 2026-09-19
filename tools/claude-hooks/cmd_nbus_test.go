@@ -203,6 +203,27 @@ func TestBaseEnvelope_StampsWorktree(t *testing.T) {
 	}
 }
 
+func TestStopFailureFields_PreservesObservedErrorAndUnknownType(t *testing.T) {
+	in := event.Parse([]byte(`{"session_id":"sess-1","error":"<redacted provider failure>"}`))
+	errorType, errorMessage := stopFailureFields(in)
+	if errorType != "unknown" {
+		t.Errorf("error type = %q, want explicit unknown", errorType)
+	}
+	if errorMessage != "<redacted provider failure>" {
+		t.Errorf("error message = %q, want observed error string", errorMessage)
+	}
+}
+
+func TestStopFailureFields_DoesNotInventMissingCause(t *testing.T) {
+	errorType, errorMessage := stopFailureFields(event.HookInput{SessionID: "sess-2"})
+	if errorType != "unknown" {
+		t.Errorf("error type = %q, want explicit unknown", errorType)
+	}
+	if errorMessage != "" {
+		t.Errorf("error message = %q, want empty when upstream omitted it", errorMessage)
+	}
+}
+
 // resetFlags rebuilds flag.CommandLine and calls flag.Parse so per-test
 // changes to os.Args are picked up by flag.Arg / flag.NArg. The
 // production binary calls flag.Parse() exactly once in main().
