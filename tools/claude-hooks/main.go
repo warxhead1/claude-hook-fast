@@ -127,6 +127,11 @@ func main() {
 		nbuspub.WorkerMain(flag.Args()[1:])
 	case "timings":
 		cmdTimings()
+	// idle-stop-check (Stop): mechanical check for "ended the turn with
+	// only a background waiter armed" — nervous-bus#36. See
+	// cmd_idle_stop_check.go.
+	case "idle-stop-check":
+		cmdIdleStopCheck()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)
