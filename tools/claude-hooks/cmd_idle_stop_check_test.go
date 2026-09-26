@@ -325,6 +325,39 @@ func TestIdleStopIsBackgroundSignal(t *testing.T) {
 	}
 }
 
+// TestIdleStopIsStatusProbeCommand_HeredocSubstringNotAProbe is a
+// regression test for a real false positive the PR's replay against
+// ~/.claude/projects transcripts turned up: a foreground `python3 -
+// <<'EOF' ... EOF` heredoc whose script body happened to contain the
+// literal text "git diff" partway through was matched by an earlier,
+// unanchored version of the status-probe regex and misclassified as a
+// read-only status probe.
+func TestIdleStopIsStatusProbeCommand_HeredocSubstringNotAProbe(t *testing.T) {
+	cmd := "python3 - <<'EOF'\nimport subprocess\nprint(subprocess.run(['git', 'diff']))\nEOF"
+	if idleStopIsStatusProbeCommand(cmd) {
+		t.Fatalf("expected a heredoc merely containing the words \"git diff\" to NOT count as a status probe")
+	}
+}
+
+func TestIdleStopIsStatusProbeCommand_ChainedNonProbeSegment_NotAProbe(t *testing.T) {
+	if idleStopIsStatusProbeCommand("git status && rm -rf build/") {
+		t.Fatalf("expected a chained command with a non-probe segment to NOT count as all-status-probe")
+	}
+}
+
+func TestIdleStopIsStatusProbeCommand_ChainedCdThenStatus_IsAProbe(t *testing.T) {
+	if !idleStopIsStatusProbeCommand("cd /home/eric/repo && git status") {
+		t.Fatalf("expected cd + git status to count as an all-status-probe command")
+	}
+}
+
+func TestIdleStopIsWaiterBashCommand_BareSleepInsideScript_NotAWaiter(t *testing.T) {
+	cmd := "python3 - <<'EOF'\nimport time\nprint('scheduling sleep(30) later')\nEOF"
+	if idleStopIsWaiterBashCommand(cmd) {
+		t.Fatalf("expected the word \"sleep\" appearing inside unrelated script content to NOT count as a wait")
+	}
+}
+
 // --- harness tests: cmdIdleStopCheck end to end over the stdin protocol ---
 
 // idsRunWithStdinFile writes stdinJSON to os.Stdin, runs cmdIdleStopCheck,

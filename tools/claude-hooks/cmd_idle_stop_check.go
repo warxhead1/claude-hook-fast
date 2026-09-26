@@ -100,15 +100,43 @@ type contentBlock struct {
 }
 
 var (
-	// idleStopSleepRe matches a background command that is (or contains) a
-	// wait: a bare `sleep`, or an until/while ... sleep poll loop.
-	idleStopSleepRe = regexp.MustCompile(`\bsleep\b`)
+	// idleStopSegmentSplitRe splits a shell command into naive top-level
+	// segments on &&, ||, ;, |, and newlines. Crude (no real shell
+	// parsing), but necessary: an EARLIER unanchored version of the status
+	// probe / sleep regexes below matched their target words as bare
+	// substrings ANYWHERE in the command — including inside an unrelated
+	// heredoc body. Replaying the classifier against real transcripts
+	// (nervous-bus#36 PR) caught this concretely: a 1000+-char `python3 -
+	// <<'EOF'` heredoc that happened to contain the literal text "git
+	// diff" partway through its script body was misclassified as a
+	// read-only status probe. Anchoring each check to a full top-level
+	// segment closes that hole.
+	idleStopSegmentSplitRe = regexp.MustCompile(`&&|\|\||[;|\n]`)
 
-	// idleStopStatusRe matches the read-only status probes explicitly named
-	// in nervous-bus#36: gh pr checks, tail/cat of a log, git status/log.
-	// Not anchored to command start — probes are frequently chained
-	// (`cd x && git status`).
-	idleStopStatusRe = regexp.MustCompile(`(?i)\b(gh\s+pr\s+checks|gh\s+pr\s+view|tail\b|cat\b|git\s+status|git\s+log|git\s+diff)\b`)
+	// idleStopWaitLoopRe matches a full until/while ... do ... sleep ...
+	// done poll loop anywhere in the command. Checked against the whole
+	// command (not per-segment) because the loop's own `;`/newline
+	// separators are part of its own shape; this pattern's four required
+	// keywords in order make an accidental match inside unrelated script
+	// content implausible.
+	idleStopWaitLoopRe = regexp.MustCompile(`(?i)\b(until|while)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\b[\s\S]*?\bdone\b`)
+
+	// idleStopBareSleepSegmentRe matches a segment that IS (starts with) a
+	// sleep invocation, e.g. "sleep 30" as its own top-level command —
+	// anchored so "sleep" appearing mid-word or mid-script doesn't count.
+	idleStopBareSleepSegmentRe = regexp.MustCompile(`(?i)^sleep\s+\S`)
+
+	// idleStopStatusSegmentRe matches a segment that IS (starts with) one
+	// of the read-only status probes named in nervous-bus#36: gh pr
+	// checks, tail/cat of a log, git status/log/diff. Anchored to segment
+	// start — see idleStopSegmentSplitRe's comment for why.
+	idleStopStatusSegmentRe = regexp.MustCompile(`(?i)^(gh\s+pr\s+checks|gh\s+pr\s+view|tail\b|cat\b|git\s+status|git\s+log|git\s+diff)\b`)
+
+	// idleStopBenignSegmentRe matches connector segments that don't
+	// themselves do anything read-sensitive (a leading `cd <path>` in a
+	// chained command) — present without disqualifying an otherwise
+	// all-status-probe command.
+	idleStopBenignSegmentRe = regexp.MustCompile(`(?i)^cd\s+\S`)
 
 	// idleStopBlockedPhraseRe matches an explicit blocked-on / nothing-else
 	// statement in the assistant's final text — the escape hatch that
@@ -129,6 +157,53 @@ var (
 		regexp.MustCompile(`(?s)<command-args>.*?</command-args>`),
 	}
 )
+
+// idleStopCommandSegments splits cmd into trimmed, non-empty top-level
+// segments (see idleStopSegmentSplitRe).
+func idleStopCommandSegments(cmd string) []string {
+	parts := idleStopSegmentSplitRe.Split(cmd, -1)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// idleStopIsWaiterBashCommand reports whether a background Bash command IS
+// a wait: a full until/while ... sleep ... done loop, or a segment that is
+// itself a bare sleep invocation.
+func idleStopIsWaiterBashCommand(cmd string) bool {
+	if idleStopWaitLoopRe.MatchString(cmd) {
+		return true
+	}
+	for _, seg := range idleStopCommandSegments(cmd) {
+		if idleStopBareSleepSegmentRe.MatchString(seg) {
+			return true
+		}
+	}
+	return false
+}
+
+// idleStopIsStatusProbeCommand reports whether EVERY top-level segment of
+// cmd is either a read-only status probe or a benign `cd` connector — a
+// chained command with even one non-probe segment (e.g. `git status && rm
+// x`) is not read-only just because one segment matches.
+func idleStopIsStatusProbeCommand(cmd string) bool {
+	segs := idleStopCommandSegments(cmd)
+	if len(segs) == 0 {
+		return false
+	}
+	for _, seg := range segs {
+		if idleStopStatusSegmentRe.MatchString(seg) || idleStopBenignSegmentRe.MatchString(seg) {
+			continue
+		}
+		return false
+	}
+	return true
+}
 
 // idleStopReadTail reads the last maxBytes of path (or the whole file if
 // smaller). Mirrors internal/hooks/transcript's tail-read pattern.
@@ -318,10 +393,10 @@ func idleStopIsAllowedCall(tc idleStopToolCall) bool {
 	case "Monitor", "ScheduleWakeup", "TaskOutput", "Workflow":
 		return true
 	case "Bash":
-		if tc.RunInBackground && idleStopSleepRe.MatchString(tc.Command) {
+		if tc.RunInBackground && idleStopIsWaiterBashCommand(tc.Command) {
 			return true
 		}
-		return idleStopStatusRe.MatchString(tc.Command)
+		return idleStopIsStatusProbeCommand(tc.Command)
 	case "Agent":
 		// A synchronous (foreground) Agent dispatch is active work in
 		// progress from the model's own turn, not an armed waiter; only a
