@@ -15,7 +15,7 @@ TS  := $(shell date +%Y%m%d-%H%M%S)
 
 .PHONY: build test install install-claude-hook-fast install-codex-hook \
         install-codex-host-policy check-codex-host-policy \
-        install-hearth-loom-hook install-steward clean-baks
+        install-hearth-loom-hook install-agy-hook install-steward clean-baks
 
 build:
 	$(GO) build ./...
@@ -60,6 +60,16 @@ install-hearth-loom-hook:
 	@[ -f "$(BIN)/hearth-loom-hook" ] && cp -p "$(BIN)/hearth-loom-hook" "$(BIN)/hearth-loom-hook.bak-$(TS)" || true
 	mv -f "$(BIN)/.hearth-loom-hook.new" "$(BIN)/hearth-loom-hook"
 	@echo "  hearth-loom-hook -> $(BIN)/hearth-loom-hook"
+
+# Installs to agy-hook-go (NOT agy-hook — the live binary at
+# ~/.local/bin/agy-hook is still the Python prototype until
+# ~/.gemini/config/hooks.json is switched over after review).
+install-agy-hook:
+	@mkdir -p "$(BIN)"
+	$(GO) build -o "$(BIN)/.agy-hook-go.new" ./cmd/agy-hook
+	@[ -f "$(BIN)/agy-hook-go" ] && cp -p "$(BIN)/agy-hook-go" "$(BIN)/agy-hook-go.bak-$(TS)" || true
+	mv -f "$(BIN)/.agy-hook-go.new" "$(BIN)/agy-hook-go"
+	@echo "  agy-hook-go -> $(BIN)/agy-hook-go"
 
 install-steward: test
 	@mkdir -p "$(BIN)"

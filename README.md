@@ -82,6 +82,25 @@ The installer preserves unrelated config and AGENTS content, migrates the prior
 unmarked delegation contract, writes backups before replacement, updates files
 atomically, and validates the resulting Codex config in the Make target.
 
+### `agy-hook` (`cmd/agy-hook/`)
+Go port of the Antigravity (agy) hook producer, behavior-identical to the
+Python prototype at `~/.local/bin/agy-hook` (wired from
+`~/.gemini/config/hooks.json`). Subcommands: `post-tool` (PostToolUse — emits
+`tool_call` when a tool name is present, else `heartbeat`), `pre-invocation`
+(PreInvocation — emits `started` only on the first invocation of a turn),
+`stop` (Stop — emits `ended`, folding in an optional termination reason and/or
+truncated error). Publishes `bus.agent.activity.v1` / `agent.session.v1` via
+the same `internal/hooks/nbuspub` package codex-hook uses; every subcommand
+prints `{}` and exits 0 no matter what, matching the three hook contracts
+(`PostToolUse` expects `{}`, `PreInvocation` treats `{}` as "no injected
+steps", `Stop` treats `{}` as default termination).
+
+`make install-agy-hook` installs to `~/.local/bin/agy-hook-go` — **not**
+`agy-hook`, so it never shadows the live Python script. Switching over is a
+one-line edit to `~/.gemini/config/hooks.json`'s `nervous-bus-telemetry`
+block, replacing `~/.local/bin/agy-hook` with `~/.local/bin/agy-hook-go` in
+all three `command` fields, done only after review.
+
 ### `hearth-loom-hook` (`cmd/hearth-loom-hook/`)
 In-container HTTP-push observability shim used inside hearth-loom dispatch containers.
 Handles Claude Code and opencode hook events, POSTing to the hearth-loom gateway.
