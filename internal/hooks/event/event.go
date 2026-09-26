@@ -46,6 +46,11 @@ type HookInput struct {
 	Source          string          `json:"source"`
 	Message         string          `json:"message"`
 	StopReason      string          `json:"stop_reason"`
+	// StopHookActive is set on the Stop event when Claude Code is already
+	// mid stop-hook-block cycle (a previous Stop hook returned decision:block
+	// this same turn). Hooks that can themselves block must check this to
+	// avoid an infinite re-block loop.
+	StopHookActive bool `json:"stop_hook_active"`
 
 	// MessageDisplay hook fields.
 	MessageText string `json:"message_text"`
