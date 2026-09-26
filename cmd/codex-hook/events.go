@@ -16,15 +16,10 @@ import (
 
 var publishAsync = nbuspub.PublishAsync // deterministic test seam
 
-func detectAgentKind() string {
-	if os.Getenv("AI_AGENT") == "" {
-		return "codex-cli"
-	}
-	if strings.Contains(os.Getenv("ANTHROPIC_BASE_URL"), "minimax.io") {
-		return "claude-code-minimax"
-	}
-	return "claude-code"
-}
+// detectAgentKind always reports "codex-cli": this binary only runs from
+// codex's own [[hooks.*]] wiring. Env heuristics (AI_AGENT inherits down any
+// process tree) mislabelled real codex sessions; MiniMax has its own producer.
+func detectAgentKind() string { return "codex-cli" }
 
 func isSubagent(p *hookPayload) bool {
 	if p == nil {

@@ -71,3 +71,26 @@ func TestCodexPaneID_TmuxFallback(t *testing.T) {
 		}
 	})
 }
+
+// nervous-bus#34: inherited AI_AGENT / ANTHROPIC_BASE_URL must not relabel codex.
+func TestDetectAgentKind_IgnoresInheritedEnv(t *testing.T) {
+	cases := []struct {
+		name    string
+		aiAgent string
+		baseURL string
+	}{
+		{"no env set", "", ""},
+		{"AI_AGENT set, no base url", "1", ""},
+		{"AI_AGENT set, minimax base url", "1", "https://api.minimax.io/anthropic"},
+		{"AI_AGENT unset, minimax base url present anyway", "", "https://api.minimax.io/anthropic"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("AI_AGENT", c.aiAgent)
+			t.Setenv("ANTHROPIC_BASE_URL", c.baseURL)
+			if got := detectAgentKind(); got != "codex-cli" {
+				t.Fatalf("detectAgentKind() = %q, want %q", got, "codex-cli")
+			}
+		})
+	}
+}
