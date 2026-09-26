@@ -149,7 +149,7 @@ func InspectCommand(command string, policy WorkerPolicy) []Violation {
 		models := flagValues(segment, "model")
 		if len(models) == 0 {
 			if policy.RequireExplicitModel {
-				violations = append(violations, Violation{Reason: "Codex worker launch blocked: pass exactly one explicit --model. Use gpt-5.6-luna for read-only work."})
+				violations = append(violations, Violation{Reason: fmt.Sprintf("Codex worker launch blocked: pass exactly one explicit --model. Use %s for read-only work.", policy.ReadOnlyModel)})
 			}
 			continue
 		}
