@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -114,9 +115,18 @@ func buildEnvelope(p *hookPayload, event string) (map[string]any, string) {
 		"model": bounded(p.Model, 120), "permission_mode": bounded(p.PermissionMode, 80), "turn_id": bounded(p.TurnID, 160),
 		"hook_event_name": bounded(p.HookEventName, 80), "source": bounded(p.Source, 80), "reason": bounded(p.Reason, 160),
 		"trigger": bounded(p.Trigger, 160), "transcript_path": bounded(p.TranscriptPath, 512),
-		"agent_transcript_path": bounded(p.AgentTranscriptPath, 512), "tool_name": bounded(p.ToolName, 120), "tool_use_id": bounded(p.ToolUseID, 160),
+		"agent_transcript_path": bounded(p.AgentTranscriptPath, 512), "tool_use_id": bounded(p.ToolUseID, 160),
 		"stop_hook_active":   p.StopHookActive,
 		"tool_input_present": len(p.effectiveInput()) > 0, "tool_response_present": len(p.ToolResponse) > 0,
+	}
+	// tool_name is omitted on heartbeats: a heartbeat carries no real tool
+	// call, but historically emitted tool_name:"Bash" anyway (a stale value
+	// left over from the last real call), which made reflex-recorder's
+	// _infer_from_behavior count every heartbeat as a tool call — a June
+	// tengine pane that only heartbeated for 15+ minutes was labelled
+	// "abandoned" purely from that stale field (nervous-bus#35 §fix 6).
+	if event != "heartbeat" {
+		env["tool_name"] = bounded(p.ToolName, 120)
 	}
 	if !sub {
 		raw, binding := qualifiedPane()
@@ -129,6 +139,12 @@ func buildEnvelope(p *hookPayload, event string) (map[string]any, string) {
 		env["description"] = details.Description
 		env["justification"] = details.Justification
 	}
+	if summary := gitOperationSummary(p); summary != "" {
+		env["tool_response_summary"] = summary
+	}
+	if isErr, ok := codexToolIsError(p); ok && event == "tool_return" {
+		env["tool_is_error"] = isErr
+	}
 	if p.Prompt != "" {
 		env["prompt_summary"] = bounded(p.Prompt, 240)
 	}
@@ -136,6 +152,125 @@ func buildEnvelope(p *hookPayload, event string) (map[string]any, string) {
 		env["last_assistant_summary"] = bounded(p.LastAssistantMessage, 240)
 	}
 	return compactEnvelope(env), can
+}
+
+// reGitCommitOrPush and reGhPrCreateOrMerge detect a resolving git/gh
+// operation ANYWHERE in the full, untruncated command text — unlike
+// toolInputDetailsFor's command_preview (payload.go boundedValue, 200
+// chars), which is what the label.py fallback regex was limited to
+// (nervous-bus#35 §fix 2: a `gofmt && go test <long pkg list> && git commit`
+// loses its commit past char 200).
+//
+// Anchored to avoid label.py's own false-positive class (`\bgit\b.*\bcommit\b`
+// matches `git diff-tree --no-commit-id`): "commit"/"push" must be the
+// subcommand word immediately following "git" (optionally past a `-C <dir>`
+// global flag), not merely present anywhere later in the line.
+var (
+	reGitCommitOrPush   = regexp.MustCompile(`\bgit\b(\s+-C\s+\S+)?\s+(commit|push)\b`)
+	reGhPrCreateOrMerge = regexp.MustCompile(`\bgh\s+pr\s+(create|merge)\b`)
+)
+
+// gitOperationSummary scans every shell command in the tool call for a
+// resolving git/gh operation and, if any is found, returns a JSON string
+// shaped {"gitOperation":{"commit":{"kind":"committed"}, ...}} — the exact
+// field name and nesting reflex-recorder's label.py._has_resolving_commit
+// already looks for as its PRIMARY signal, inside tool_response_summary
+// (adapters/reflex-recorder/label.py:489-508). Emitting it there needs no
+// nervous-bus schema change (bus.agent.activity.v1.json's tool_response_summary
+// is already a free-form string, additionalProperties:true) and no label.py
+// change — codex-hook was simply never populating a field label.py already
+// knew how to read.
+func gitOperationSummary(p *hookPayload) string {
+	op := map[string]any{}
+	for _, cmd := range shellCommands(p) {
+		if reGitCommitOrPush.MatchString(cmd) {
+			for _, m := range reGitCommitOrPush.FindAllStringSubmatch(cmd, -1) {
+				switch m[2] {
+				case "commit":
+					op["commit"] = map[string]any{"kind": "committed"}
+				case "push":
+					op["push"] = map[string]any{"kind": "pushed"}
+				}
+			}
+		}
+		if m := reGhPrCreateOrMerge.FindStringSubmatch(cmd); m != nil {
+			switch m[1] {
+			case "create":
+				op["pr_create"] = map[string]any{"kind": "pr_created"}
+			case "merge":
+				op["pr_merge"] = map[string]any{"kind": "pr_merged"}
+			}
+		}
+	}
+	if len(op) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(map[string]any{"gitOperation": op})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// codexToolIsError reports whether the tool call failed, from tool_response.
+// ok is false when the codex runtime gives no signal to read at all — which,
+// as of the current Codex CLI (verified live against openai/codex#34289,
+// still open, most recently reconfirmed on 0.152.1/0.154.0 as of
+// 2026-09-18), is EVERY call: PostToolUse's tool_response is a plain string
+// (the model-facing output text), with no is_error/exit_code field, and a
+// silent failure (`sh -c 'exit 3'`) is byte-identical to a silent success.
+// The exit code exists internally (codex's own rollout items record it) but
+// is stripped before the hook runs; upstream has three proposed fixes open
+// and none shipped. Content heuristics on tool_response text are explicitly
+// NOT an acceptable substitute (upstream issue thread): they false-positive
+// on successful commands whose output merely contains error-like text (test
+// logs, grep output) and cannot detect a quiet failure at all, so this
+// function does not attempt one.
+//
+// What IS implemented: parsing tool_response as a JSON object for any of the
+// fields codex might reasonably ship (is_error, exit_code, the proposed
+// tool_exit_code, or a nested status.exit_code) — free, forward-compatible,
+// and activates automatically the day upstream adds one, with zero further
+// changes here. Until then this always returns ok=false and tool_is_error is
+// correctly omitted rather than fabricated.
+func codexToolIsError(p *hookPayload) (isError bool, ok bool) {
+	if p == nil || len(p.ToolResponse) == 0 {
+		return false, false
+	}
+	var v any
+	if json.Unmarshal(p.ToolResponse, &v) != nil {
+		return false, false
+	}
+	m, isObj := v.(map[string]any)
+	if !isObj {
+		return false, false // current codex shape: a plain string — no signal
+	}
+	if b, present := m["is_error"].(bool); present {
+		return b, true
+	}
+	for _, key := range []string{"exit_code", "tool_exit_code"} {
+		if n, present := asInt(m[key]); present {
+			return n != 0, true
+		}
+	}
+	if status, present := m["status"].(map[string]any); present {
+		if n, present2 := asInt(status["exit_code"]); present2 {
+			return n != 0, true
+		}
+	}
+	return false, false
+}
+
+func asInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	default:
+		return 0, false
+	}
 }
 
 func compactEnvelope(env map[string]any) map[string]any {
