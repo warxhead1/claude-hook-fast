@@ -122,19 +122,19 @@ worker is `xhigh`; `--effort max` is rejected.
   is the source of truth; remote is the backup. Resolve divergence by moving
   local history forward.
 - No secret value may reach command output, a log, or any file read back
-  into context. Consume credentials through a vault's execution path so the
-  value lands only in a child process's environment, never on an echoed
-  stream.
+  into context. Consume credentials only via
+  `hearth-vault exec --prefix <proj>/ --redact -- <cmd>`; never cat a secrets
+  file and never add a key to a `.env`.
 - Never escalate privileges. A root-owned config change is a handoff: write
   the file and name the one install command for a human to run; do not probe
   whether elevation is available.
-- Every isolated worktree lives on the designated bulk-scratch disk, never
-  nested inside a tracked directory of the checkout it isolates.
-- Scratch and intermediate iterations never land inside the checkout being
-  edited; write them to a scratch path outside version control and copy in
-  only the final artifact.
-- A fast tmpfs-backed temp directory is RAM, not disk. Never park build
-  caches, clones, or long-lived work there.
-- File every discovered defect or follow-up immediately, at discovery time,
-  as a tracked issue with evidence and file:line references, not only in a
-  chat summary.
+- Every isolated worktree lives at `/home/eric/data2/worktrees/<project>/<name>`,
+  never nested inside the checkout it isolates.
+- Scratch and intermediate iterations never land inside the checkout; write
+  them under `/home/eric/data2/orca/<project>/_evidence/<date>/<lane>/scratch/`
+  and copy in only the final artifact.
+- `/tmp` is a 32G tmpfs (RAM). Never park build caches, clones, or
+  long-lived work there; use `~/.cache/<tool>` or `/home/eric/data2`.
+- File every discovered defect or follow-up at discovery time: a GitHub
+  issue (`gh issue create`, evidence + file:line) AND a bead
+  (`bd create ... -l <project>,<area>`; always pass `-l <project>`).
