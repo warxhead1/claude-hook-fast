@@ -71,3 +71,34 @@ func TestCodexPaneID_TmuxFallback(t *testing.T) {
 		}
 	})
 }
+
+// nervous-bus#34: detectAgentKind must always report "codex-cli" and must
+// NOT be swayed by AI_AGENT / ANTHROPIC_BASE_URL, which are environment
+// variables that inherit down any process tree. A real `codex exec`
+// launched inside an unrelated AI_AGENT-flagged ancestor (measured: a
+// Gemini/Antigravity "council" sandbox) was getting mislabeled
+// agent_kind="claude-code" for its whole session, and 246/257 (95.7%) of
+// that mislabeled bucket then looked like empty-tool-histogram "claude
+// code" runs in the reflex run store even though the underlying codex
+// sessions used tools normally.
+func TestDetectAgentKind_IgnoresInheritedEnv(t *testing.T) {
+	cases := []struct {
+		name    string
+		aiAgent string
+		baseURL string
+	}{
+		{"no env set", "", ""},
+		{"AI_AGENT set, no base url", "1", ""},
+		{"AI_AGENT set, minimax base url", "1", "https://api.minimax.io/anthropic"},
+		{"AI_AGENT unset, minimax base url present anyway", "", "https://api.minimax.io/anthropic"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("AI_AGENT", c.aiAgent)
+			t.Setenv("ANTHROPIC_BASE_URL", c.baseURL)
+			if got := detectAgentKind(); got != "codex-cli" {
+				t.Fatalf("detectAgentKind() = %q, want %q", got, "codex-cli")
+			}
+		})
+	}
+}
