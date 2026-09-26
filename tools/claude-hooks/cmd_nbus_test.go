@@ -150,6 +150,24 @@ func TestBoundToolSummary_TargetsDispatchTools(t *testing.T) {
 			t.Errorf("%s: len = %d, want %d", tool, got, toolSummaryBoundLarge)
 		}
 	}
+	// A dispatch whose prompt overflows keeps every short field and stays valid JSON.
+	agentRaw, _ := json.Marshal(map[string]any{
+		"description": "d", "model": "sonnet", "prompt": "é\"" + long,
+		"run_in_background": true, "subagent_type": "Explore",
+	})
+	got := boundToolSummary("Agent", agentRaw)
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatalf("dispatch summary is not valid JSON: %v (%q)", err, got)
+	}
+	if len(got) > toolSummaryBoundLarge || m["subagent_type"] != "Explore" || m["model"] != "sonnet" || m["run_in_background"] != true {
+		t.Errorf("dispatch summary lost short fields or overflowed: len=%d %v", len(got), m)
+	}
+	// Bulk field that is not a string, or short fields alone over the bound: prefix cut.
+	huge, _ := json.Marshal(map[string]any{"description": long, "prompt": 7})
+	if got := boundToolSummary("Agent", huge); len(got) != toolSummaryBoundLarge {
+		t.Errorf("fallback len = %d, want %d", len(got), toolSummaryBoundLarge)
+	}
 	for _, tool := range []string{"Bash", "Read", "Edit", ""} {
 		if got := len(boundToolSummary(tool, raw)); got != toolSummaryBound {
 			t.Errorf("%s: len = %d, want %d", tool, got, toolSummaryBound)
