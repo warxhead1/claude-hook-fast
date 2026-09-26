@@ -4,6 +4,11 @@ This contract applies to every Codex session and repository unless the user
 explicitly overrides it. Code quality, coherent implementation, and retained
 context take priority over minimizing the model cost of each edit.
 
+The only model ids this account accepts are `gpt-5.5`, `gpt-5.6-sol`, and
+`gpt-6-astra`. Any other model id returns an HTTP 400 rejection on this
+account and must never be named in a launch command. Effort ceiling for any
+worker is `xhigh`; `--effort max` is rejected.
+
 ## Direct implementation
 
 - The active agent owns the work end to end. In an Astra (`gpt-6-astra`)
@@ -24,28 +29,29 @@ context take priority over minimizing the model cost of each edit.
 
 ## Model routing when delegation is justified
 
-- Prefer `gpt-5.6-luna` for an independent read-only inventory, evidence
-  collection, documentation audit, or bounded review. Read code directly when
-  the implementation depends on understanding it.
+- Prefer `gpt-5.6-sol` for both a justified independent implementation task
+  and an independent read-only inventory, evidence collection, documentation
+  audit, or bounded review. It is the general worker tier for anything that
+  is not exceptional judgment or synthesis.
+- `gpt-5.5` is a lightweight fallback worker tier when Sol is unavailable or
+  capped; it carries the same free (non-restricted) launch rules as Sol.
 - MiniMax through `mmx-dispatch` is optional for a large, uniform mechanical
   slice with a frozen design contract and meaningful acceptance gates. Green
   tests alone do not establish semantic correctness or product quality.
-- Use `gpt-5.6-terra` for a justified independent implementation task needing
-  judgment that is not a good mechanical MMX slice.
-- An additional Astra or Sol worker requires an explicit user request or a
-  concrete exceptional reason stated before launch. The primary agent remains
-  responsible for integration and validation.
+- An additional Astra worker requires an explicit user request or a concrete
+  exceptional reason stated before launch, for judgment-heavy review or
+  synthesis work only. The primary agent remains responsible for integration
+  and validation.
 
 ## Fail-closed launch rules
 
 - Every `orca-ide orchestration worker-start` command must include an explicit
   `--agent`. Every Codex worker must also include exactly one explicit `--model`.
-- Delegated read-only Codex workers normally use `--model gpt-5.6-luna`.
-- The host hook permits Luna and Terra normally. An additional Astra worker
-  requires `--model gpt-6-astra` and `CODEX_ALLOW_ASTRA_WORKER=1`; a Sol worker
-  requires `--model gpt-5.6-sol` and `CODEX_ALLOW_SOL_WORKER=1`. These explicit
-  launch prefixes acknowledge exceptional worker use. Unknown, missing, or
-  duplicate models are denied. The prefixes apply to supervised Orca worker
+- Delegated read-only Codex workers normally use `--model gpt-5.6-sol`.
+- The host hook permits Sol and gpt-5.5 normally. An additional Astra worker
+  requires `--model gpt-6-astra` and `CODEX_ALLOW_ASTRA_WORKER=1`. This explicit
+  launch prefix acknowledges exceptional worker use. Unknown, missing, or
+  duplicate models are denied. The prefix applies to supervised Orca worker
   launches, not to an ordinary primary Codex session.
 - Before launching, tell the user the worker count, model, and bounded purpose.
 - Inspect every Orca launch receipt. `launch.requested.model` and
@@ -96,8 +102,39 @@ context take priority over minimizing the model cost of each edit.
 
 - The active agent, including Astra, investigates, designs, implements, tests,
   integrates, and reviews.
-- Optional Luna workers collect independent evidence or provide bounded review.
-- Optional MMX and Terra workers handle justified, bounded slices under the
+- Optional Sol or gpt-5.5 workers collect independent evidence, provide bounded
+  review, or handle a justified, bounded implementation slice under the active
+  agent's design and review.
+- Optional MMX workers handle justified, bounded mechanical slices under the
   active agent's design and review.
-- Additional Astra or Sol workers are exceptional, explicitly pinned, and
-  launched with the required opt-in prefix.
+- An additional Astra worker is exceptional, explicitly pinned, and launched
+  with the required opt-in prefix, reserved for judgment-heavy review or
+  synthesis.
+
+## Guardrails (rulings, not procedures)
+
+- One destructive action per command. Never chain push, merge, reset, delete,
+  or worktree removal with each other or with a build.
+- A dirty working tree means stop and find out whose work it is before
+  touching it; a bare "stash everything" is not a substitute for
+  understanding and can grab another session's uncommitted work.
+- Never reset or force-push a shared branch to match a remote. Local history
+  is the source of truth; remote is the backup. Resolve divergence by moving
+  local history forward.
+- No secret value may reach command output, a log, or any file read back
+  into context. Consume credentials through a vault's execution path so the
+  value lands only in a child process's environment, never on an echoed
+  stream.
+- Never escalate privileges. A root-owned config change is a handoff: write
+  the file and name the one install command for a human to run; do not probe
+  whether elevation is available.
+- Every isolated worktree lives on the designated bulk-scratch disk, never
+  nested inside a tracked directory of the checkout it isolates.
+- Scratch and intermediate iterations never land inside the checkout being
+  edited; write them to a scratch path outside version control and copy in
+  only the final artifact.
+- A fast tmpfs-backed temp directory is RAM, not disk. Never park build
+  caches, clones, or long-lived work there.
+- File every discovered defect or follow-up immediately, at discovery time,
+  as a tracked issue with evidence and file:line references, not only in a
+  chat summary.
