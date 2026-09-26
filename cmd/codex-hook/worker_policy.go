@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/warxhead1/claude-hook-fast/internal/hooks/codexpolicy"
 	"github.com/warxhead1/claude-hook-fast/internal/hooks/hooklog"
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/shellguard"
 )
 
 type preToolDecision struct {
@@ -26,6 +27,23 @@ func newCodexHookPreToolCmd() *cobra.Command {
 			return nil
 		}
 		emitHook(p, "tool_pre", false)
+
+		// Destructive-shell guards (rm -r outside scratch, sudo, bare git
+		// stash/pop, git reset --hard to a remote ref, git clean -f) run
+		// FIRST and unconditionally — a bad worker-policy load must never
+		// mask them, and they apply regardless of which model launched the
+		// command. See internal/hooks/shellguard for the single-source
+		// mirror of the Claude-side ~/.claude/hook-rules.json guards.
+		for _, command := range shellCommands(p) {
+			if os.Getenv("CODEX_SHELL_GUARD_DISABLE") == "1" {
+				break // kill switch, mirrors RM_GUARD_DISABLE on the Claude side
+			}
+			if v := shellguard.Inspect(command, p.CWD); v != nil {
+				hooklog.WriteEvent("codex_shell_guard_blocked", map[string]any{"rule_id": v.RuleID})
+				return writePreToolBlock(v.Message)
+			}
+		}
+
 		policy, err := codexpolicy.Load()
 		if err != nil {
 			reason := fmt.Sprintf("Codex worker launch policy is invalid and has failed closed: %v", err)

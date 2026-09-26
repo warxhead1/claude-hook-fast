@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "sudo-any",
+      "command_regex": "(^|[;&|(\\n`]\\s*|\\$\\(\\s*)sudo\\b",
+      "message": "sudo BLOCKED — Eric ruling 2026-09-23: sudo should never be in an agent's calls. A test branch that only runs as root is NOT a reason to escalate: say which assertions went unexercised and where they do run (CI, or the deploy host's own documented procedure). If root is genuinely required, hand the operator the exact command and stop."
+    },
+    {
+      "id": "git-stash-bare",
+      "command_regex": "(^|[;&|]\\s*)git\\s+stash(\\s+(push|save))?(\\s+(-[a-zA-Z]+|--[a-zA-Z][a-zA-Z-]*)(\\s+(\"[^\"]*\"|'[^']*'|[^-;&|\\s]\\S*))?)*\\s*($|[;&|])",
+      "message": "WHOLE-TREE git stash BLOCKED — a bare stash grabs EVERY dirty tracked file in the checkout, including other concurrent agents' and the user's uncommitted work. Use a pathspec-limited stash for YOUR files only: git stash push -- <your paths>, or avoid stashing entirely: git diff <paths> to inspect, git checkout <sha> -- <paths> to extract. git stash pop/list/show/apply/drop remain allowed."
+    },
+    {
+      "id": "git-stash-pop-or-bare-apply",
+      "command_regex": "(^|[;&|\\n]\\s*)git\\s+stash\\s+(pop(\\s|$)|apply\\s*($|[;&|\\n]))",
+      "message": "git stash pop / bare `git stash apply` BLOCKED — the stash stack is shared across the main checkout and every worktree, and other sessions push onto it concurrently; `pop` (and `apply` with no ref) takes whatever is on TOP, which may be another session's work. If you stashed with a tag: `git stash list --format='%H %gs' | grep <tag>` then `git stash apply <sha>` and drop that entry by re-finding it. Better: don't stash — commit a WIP on your branch."
+    },
+    {
+      "id": "git-clean-force",
+      "command_regex": "(^|[;&|\\n]\\s*)git\\s+clean\\s+[^;&|]*-[a-zA-Z]*f",
+      "message": "git clean -f BLOCKED — force-deleting untracked files in a shared checkout destroys other agents' not-yet-committed new files (untracked ≠ unimportant: migrations, new modules, design docs all start untracked). Run git clean -n first to see the hit list, then delete specific paths with rm <path> so the removal is explicit and reviewable."
+    },
+    {
+      "id": "git-reset-hard-origin",
+      "command_regex": "(^|[;&|\\n]\\s*)git\\s+reset\\s+(-\\S+\\s+)*--hard\\s+(origin/|@\\{u\\}|@\\{upstream\\})",
+      "message": "git reset --hard to a remote ref BLOCKED — local is the source of truth; remote is a backup. Resetting hard to origin/* discards every local commit and uncommitted change in one shot, including other concurrent agents' and the user's in-progress work. Resolve divergence by moving local forward (merge/rebase onto the remote, or cherry-pick), never by discarding local history."
+    }
+  ]
+}
