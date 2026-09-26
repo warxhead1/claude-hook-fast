@@ -35,6 +35,9 @@ func newCodexHookPreToolCmd() *cobra.Command {
 		// command. See internal/hooks/shellguard for the single-source
 		// mirror of the Claude-side ~/.claude/hook-rules.json guards.
 		for _, command := range shellCommands(p) {
+			if os.Getenv("CODEX_SHELL_GUARD_DISABLE") == "1" {
+				break // kill switch, mirrors RM_GUARD_DISABLE on the Claude side
+			}
 			if v := shellguard.Inspect(command, p.CWD); v != nil {
 				hooklog.WriteEvent("codex_shell_guard_blocked", map[string]any{"rule_id": v.RuleID})
 				return writePreToolBlock(v.Message)
