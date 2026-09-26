@@ -1411,8 +1411,64 @@ func boundToolSummary(toolName string, raw json.RawMessage) string {
 	n := toolSummaryBound
 	if largeInputTools[toolName] {
 		n = toolSummaryBoundLarge
+		if s, ok := boundDispatchSummary(raw, n); ok {
+			return s
+		}
 	}
 	return boundedToolSummaryN(raw, n)
+}
+
+// dispatchBulkFields are the free-text fields of a dispatch input. Keys marshal
+// alphabetically, so a raw prefix cut lands inside "prompt" and drops every key
+// after it (run_in_background, subagent_type) — the consumer then cannot tell
+// which agent type or tier was dispatched. Trimming only the bulk field keeps
+// the summary valid JSON with every short field intact.
+var dispatchBulkFields = []string{"prompt", "script"}
+
+// boundDispatchSummary shortens the bulk text field so the compact JSON fits in
+// n bytes. ok is false when the input is not an object or the short fields alone
+// exceed n; the caller then falls back to a plain prefix cut.
+func boundDispatchSummary(raw json.RawMessage, n int) (string, bool) {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return "", false
+	}
+	full, err := json.Marshal(m)
+	if err != nil {
+		return "", false
+	}
+	if len(full) <= n {
+		return string(full), true
+	}
+	for _, k := range dispatchBulkFields {
+		text, isStr := m[k].(string)
+		if !isStr {
+			continue
+		}
+		runes := []rune(text)
+		m[k] = ""
+		base, err := json.Marshal(m)
+		if err != nil || len(base) > n {
+			m[k] = text
+			continue
+		}
+		keep := n - len(base)
+		if keep > len(runes) {
+			keep = len(runes)
+		}
+		for keep >= 0 {
+			m[k] = string(runes[:keep])
+			buf, err := json.Marshal(m)
+			if err != nil {
+				return "", false
+			}
+			if len(buf) <= n {
+				return string(buf), true
+			}
+			keep -= len(buf) - n
+		}
+	}
+	return "", false
 }
 
 // boundedToolSummary returns the first 200 chars of the compacted tool_input.
