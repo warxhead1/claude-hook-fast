@@ -521,3 +521,24 @@ func TestCmdIdleStopCheck_ExplicitBlockedOnStatement_Allows(t *testing.T) {
 		t.Fatalf("expected no output when the final text states blocked-on, got %q", out)
 	}
 }
+
+func TestIdleStopExtractTurn_TaskNotificationIsBoundary(t *testing.T) {
+	// Real work happened in the human-initiated turn; a later background
+	// notification woke the model, which only re-armed a waiter. That
+	// wakeup turn is what must be judged.
+	lines := []string{
+		idleFixtureUser("Real user request goes here."),
+		idleFixtureAssistantToolUse("Edit", map[string]any{"file_path": "/x"}),
+		idleFixtureToolResult(),
+		idleFixtureUser("<task-notification>\n<status>completed</status>\n</task-notification>"),
+		idleFixtureAssistantToolUse("Bash", map[string]any{"command": "until [ -f done ]; do sleep 30; done", "run_in_background": true}),
+		idleFixtureAssistantText("Armed the waiter."),
+	}
+	turn := idleStopExtractTurn([]byte(strings.Join(lines, "\n")))
+	if !turn.BoundaryFound || len(turn.ToolCalls) != 1 {
+		t.Fatalf("expected boundary at the notification with 1 tool call, got %+v", turn)
+	}
+	if !idleStopShouldFire(turn) {
+		t.Fatalf("expected fire on a notification-woken turn that only re-armed a waiter")
+	}
+}

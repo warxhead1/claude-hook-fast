@@ -316,6 +316,14 @@ func idleStopIsGenuineUserBoundary(e transcriptEntry) bool {
 	if onlyNonText {
 		return false
 	}
+	// A background task-notification starts a NEW model turn: the harness
+	// re-invokes the model with it. Without this, "notification arrives,
+	// re-arm a waiter, stop" — the autonomous hold-loop shape of the
+	// never-park-idle failure — would be merged into the earlier turn's
+	// real work and never fire.
+	if strings.Contains(text, "<task-notification>") {
+		return true
+	}
 	return idleStopStripInjectedTags(text) != ""
 }
 
