@@ -154,6 +154,43 @@ seen_tool_use_ids.add(tid)
 
 ---
 
+## Codex-hook additions (nervous-bus#35 §4 fixes 2, 3, 6)
+
+`cmd/codex-hook` emits `bus.agent.activity.v1` and `agent.session.v1` from the
+Codex CLI hook wiring (see `events.go`). It historically emitted a much
+thinner envelope than the Claude side — no structured git-op signal, no
+failure signal, and heartbeats carried a stale `tool_name`. All three closed
+without a nervous-bus schema change (`bus.agent.activity.v1.json` already has
+`additionalProperties: true` and an existing `tool_response_summary`/
+`tool_is_error` shape the Claude side had already declared).
+
+| Field | Type | When emitted | Notes |
+|---|---|---|---|
+| `tool_response_summary` | string (JSON) | tool_pre and tool_post, when a shell command in the call matches a resolving git/gh operation | Shape: `{"gitOperation":{"commit":{"kind":"committed"},"push":{"kind":"pushed"},"pr_create":{...},"pr_merge":{...}}}` — only the keys that matched are present. This is exactly the field/shape `adapters/reflex-recorder/label.py:_has_resolving_commit` already parses as its PRIMARY signal; no label.py change needed. Detection runs over the FULL, untruncated command text (`gitOperationSummary` in `events.go`), not the 200-char `command_preview` the old fallback regex was limited to. |
+| `tool_is_error` | boolean | tool_post (`event == "tool_return"`), only when the codex runtime gives a signal | See limitation below — as of the current Codex CLI this is effectively never emitted. |
+| `tool_name` | string | every non-heartbeat event | **Omitted entirely on `heartbeat` events** (previously carried a stale value from the last real tool call, which made every heartbeat-only pane look like a tool call to `label.py`'s behavior inference). |
+
+### `tool_is_error` is blocked upstream, not unimplemented
+
+`codexToolIsError` in `events.go` parses `tool_response` for `is_error`,
+`exit_code`, the informally-proposed `tool_exit_code`, or a nested
+`status.exit_code` — but the current Codex CLI's `PostToolUse` payload sends
+`tool_response` as a **plain string** (the model-facing output text) with no
+failure discriminator at all, and a silent failure (`sh -c 'exit 3'`) is
+byte-identical to a silent success. This is a live, open upstream limitation:
+[openai/codex#34289](https://github.com/openai/codex/issues/34289),
+reconfirmed on every release from 0.144.5 through 0.154.0 (last reconfirmed
+2026-09-18). The exit code exists internally (codex's own rollout items
+record it) but is stripped before the hook runs. Content heuristics on the
+output text are explicitly not a substitute (false-positives on successful
+commands whose output contains error-like text; cannot detect a quiet
+failure at all) and this code does not attempt one — `codexToolIsError`
+returns `ok=false` and the field is correctly omitted, not guessed. The
+parsing above is forward-compatible: it activates with zero further changes
+here the day upstream ships any of its three proposed fixes.
+
+---
+
 ## Cheapness
 
 | Signal | Source | Cost |
