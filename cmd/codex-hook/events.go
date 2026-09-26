@@ -16,27 +16,9 @@ import (
 
 var publishAsync = nbuspub.PublishAsync // deterministic test seam
 
-// detectAgentKind always reports "codex-cli": this binary is only ever
-// invoked from codex's own [[hooks.*]] wiring in config.toml (see
-// buildEnvelope's hardcoded "agent": "codex"), so every session it sees
-// IS a real Codex CLI session.
-//
-// It used to branch on the AI_AGENT / ANTHROPIC_BASE_URL env vars to
-// (mis)detect "claude-code" and "claude-code-minimax" flavors. That
-// heuristic is retired: nervous-bus issue #34 found it corrupting the
-// coverage metrics — AI_AGENT is an environment variable that inherits
-// down any process tree, so a real `codex exec` launched from inside an
-// unrelated AI_AGENT-flagged ancestor process (measured: a Gemini/
-// Antigravity "council" sandbox at /tmp/council-sandbox-desktop) got
-// mislabeled agent_kind="claude-code" for its whole lifetime even though
-// it was genuine Codex. 246/257 (95.7%) of runs.db's "claude-code" bucket
-// had an empty tool_histogram as a direct result — not because those
-// sessions used no tools, but because the label routed them out of the
-// codex-cli population whose matcher/coverage story is actually healthy
-// (98.4% coverage in September 2026). MiniMax's own Claude-Code-in-a-
-// sandbox path is a fully separate producer (cmmx-hook, wired by
-// claude-minimax-sandboxed with its own hooks.json) that already tags
-// "claude-code-minimax" correctly; this binary never needs to guess it.
+// detectAgentKind always reports "codex-cli": this binary only runs from
+// codex's own [[hooks.*]] wiring. Env heuristics (AI_AGENT inherits down any
+// process tree) mislabelled real codex sessions; MiniMax has its own producer.
 func detectAgentKind() string { return "codex-cli" }
 
 func isSubagent(p *hookPayload) bool {

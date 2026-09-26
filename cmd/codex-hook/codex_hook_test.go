@@ -72,15 +72,7 @@ func TestCodexPaneID_TmuxFallback(t *testing.T) {
 	})
 }
 
-// nervous-bus#34: detectAgentKind must always report "codex-cli" and must
-// NOT be swayed by AI_AGENT / ANTHROPIC_BASE_URL, which are environment
-// variables that inherit down any process tree. A real `codex exec`
-// launched inside an unrelated AI_AGENT-flagged ancestor (measured: a
-// Gemini/Antigravity "council" sandbox) was getting mislabeled
-// agent_kind="claude-code" for its whole session, and 246/257 (95.7%) of
-// that mislabeled bucket then looked like empty-tool-histogram "claude
-// code" runs in the reflex run store even though the underlying codex
-// sessions used tools normally.
+// nervous-bus#34: inherited AI_AGENT / ANTHROPIC_BASE_URL must not relabel codex.
 func TestDetectAgentKind_IgnoresInheritedEnv(t *testing.T) {
 	cases := []struct {
 		name    string
