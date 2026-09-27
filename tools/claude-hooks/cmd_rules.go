@@ -48,7 +48,7 @@
 //	        "fire_once":   false              // reset counter to 0 after firing
 //	      },
 //	      "action": {
-//	        "type":     "block",              // "block"|"warn"|"log"|"emit"|"reset"
+//	        "type":     "block",              // "block"|"ask"|"warn"|"log"|"emit"|"reset"
 //	        "message":  "...",                // for block/warn
 //	        "pipeline": "flow",               // for log/emit
 //	        "counter":  ""                    // for reset: counter to zero out
@@ -60,6 +60,10 @@
 // Action types:
 //
 //	"block"  — write message to stderr, exit 2 (stops Claude).
+//	"ask"    — emit a PreToolUse permissionDecision "ask" with the message as
+//	           the reason, exit 0: the operator approves or denies the call in
+//	           the UI. Hook "ask" still prompts under bypassPermissions, where a
+//	           settings.json ask rule does not.
 //	"warn"   — surface message as a non-blocking feedback nudge (written to the
 //	           feedback-db, collected by feedback-collector and shown to the
 //	           assistant) and CONTINUE evaluating; exit 0. Use for steering rules
@@ -157,7 +161,7 @@ type whenCfg struct {
 }
 
 type actionCfg struct {
-	Type     string `json:"type"` // "block"|"warn"|"log"|"emit"|"reset"
+	Type     string `json:"type"` // "block"|"ask"|"warn"|"log"|"emit"|"reset"
 	Message  string `json:"message"`
 	Pipeline string `json:"pipeline"` // for log/emit
 	Counter  string `json:"counter"`  // for reset
@@ -1105,6 +1109,20 @@ func evalRulesConfig(configPath string, in *ruleHookPayload, cmd, matchCmd strin
 				fmt.Fprintln(os.Stderr)
 			}
 			hookExit(2)
+
+		case "ask":
+			if rule.When.FireOnce && rule.State.Counter != "" {
+				resetRuleCounter(sd, rule)
+			}
+			out, _ := json.Marshal(map[string]any{
+				"hookSpecificOutput": map[string]any{
+					"hookEventName":            "PreToolUse",
+					"permissionDecision":       "ask",
+					"permissionDecisionReason": rule.Action.Message,
+				},
+			})
+			fmt.Fprintln(os.Stdout, string(out))
+			hookExit(0)
 
 		case "warn":
 			// Non-blocking steering nudge: surface the message via the feedback-db
