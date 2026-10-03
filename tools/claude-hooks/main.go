@@ -71,6 +71,8 @@ func main() {
 		cmdNbusSessionEnd()
 	case "nbus-assignment":
 		cmdNbusAssignment()
+	case "nbus-task-notification":
+		cmdNbusTaskNotification()
 	case "nbus-subagent-lifecycle":
 		cmdNbusSubagentLifecycle()
 	case "steering-poll":

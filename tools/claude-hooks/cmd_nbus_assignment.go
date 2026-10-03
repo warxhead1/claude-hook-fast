@@ -213,6 +213,7 @@ func cmdNbusAssignment() {
 		hooklog.Writef("nbus-assignment: %s without tool_use_id; skipped", in.ToolName)
 		return
 	}
+	recordDispatch(in.ToolUseID)
 	env, can := baseEnvelope(in, "assigned", in.AgentKind())
 	for k, v := range fields {
 		env[k] = v

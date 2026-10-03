@@ -120,6 +120,9 @@ func baseEnvelope(in event.HookInput, eventName, agentKind string) (map[string]a
 	if os.Getenv("ORCA_HISTFILE") != "" || event.OrcaTerminalHandle() != "" {
 		env["managed_by"] = "orca"
 	}
+	if in.IsSubagent() {
+		stampSubagentJoin(env, in)
+	}
 	return env, can
 }
 
@@ -206,6 +209,9 @@ func cmdNbusActivity() {
 	}
 
 	publishNbusEnvelope(chanAgentActivity, env, can)
+
+	handleAgentToolReturn(in)
+	scanTranscriptNotifications(in)
 
 	// AskUserQuestion answered: PostToolUse fires for it (confirmed empirically)
 	// and the result carries the user's selection in tool_response.answers as
@@ -314,6 +320,7 @@ func cmdNbusSessionStart() {
 func cmdNbusStop() {
 	in, _ := readStdinForHook()
 	emitSessionLifecycleFromInput(in, "turn_end")
+	scanTranscriptNotifications(in)
 	maybeHarvestOnStop(in)
 }
 
