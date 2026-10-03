@@ -33,7 +33,10 @@ hook except Grep/Glob.
 | `pane_id_qualified` | string | `tmux:<pane>` or `zellij:<sess>:<pane>` |
 | `transcript_path` | string | path to JSONL transcript |
 | `source_kind` | string | hook `source` field |
-| `parent_tool_use_id` | string | set for subagent calls |
+| `parent_tool_use_id` | string | subagent events: the Agent `tool_use_id` that spawned the subagent (payload field, else the subagent's meta.json `toolUseId`, else the registry written at the parent's Agent PostToolUse) |
+| `assignment_id` | string | subagent events: same value; equals `bus.work.assignment.v1` `assignment_id` |
+| `subagent_id` | string | subagent hex (`agent_id` in the hook payload) |
+| `status` | string | `ended` only: `completed`, `failed`, `cancelled` |
 | `tool_name` | string | e.g. `"Bash"`, `"Read"`, `"Edit"` |
 | `tool_summary` | string | first 200 chars of compacted tool_input JSON |
 | `tool_response_summary` | string | first 300 chars of compacted tool_response |
@@ -205,3 +208,11 @@ that has a non-empty `transcript_path`. Benchmarks on a warm filesystem:
 Go toolchain build flags (`-trimpath -ldflags='-s -w'`).
 
 Binary size: **6.58 MB** (was **6.58 MB** before, +12 KB for transcript package).
+
+## Subagent terminal event
+
+`event=ended` is published once per dispatched subagent (marker file
+`~/.hearth-loom/subagent-join/ended-<tool_use_id>`), from the parent: the
+Agent PostToolUse of a foreground dispatch, or a `<task-notification>` seen on
+UserPromptSubmit (`nbus-task-notification`) or in the parent transcript tail at
+the next PostToolUse/Stop. `subagent_stopped` repeats mid-run and is not terminal.

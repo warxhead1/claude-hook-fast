@@ -72,6 +72,15 @@ type HookInput struct {
 	SubagentType string `json:"subagent_type"`
 	SubagentID   string `json:"subagent_id"`
 
+	// AgentID / AgentType are sent on hooks fired inside a subagent (the
+	// per-subagent hex id, equal to its agent-<hex> worktree and transcript
+	// names); absent in a top-level session.
+	AgentID   string `json:"agent_id"`
+	AgentType string `json:"agent_type"`
+
+	// UserPromptSubmit: the submitted prompt text.
+	Prompt string `json:"prompt"`
+
 	// PostToolUse enrichment fields.
 	// tool_use_id is the stable ID for the individual tool invocation; it
 	// matches the toolUseID recorded in the transcript hook-attachment entry.
@@ -157,6 +166,31 @@ func (h HookInput) EffectiveCWD() string {
 	}
 	if v, err := os.Getwd(); err == nil {
 		return v
+	}
+	return ""
+}
+
+// SubagentHex returns the per-subagent hex id: the payload agent_id, else the
+// agent-<hex> segment of a /subagents/ transcript path, else the agent-<hex>
+// cwd basename of a dispatch worktree. Empty for a top-level session.
+func (h HookInput) SubagentHex() string {
+	if h.AgentID != "" {
+		return h.AgentID
+	}
+	if strings.Contains(h.TranscriptPath, "/subagents/") {
+		if b := filepath.Base(h.TranscriptPath); strings.HasPrefix(b, "agent-") {
+			if hex := strings.TrimSuffix(strings.TrimPrefix(b, "agent-"), ".jsonl"); hex != "" {
+				return hex
+			}
+		}
+	}
+	cwd := h.EffectiveCWD()
+	b := filepath.Base(cwd)
+	if strings.HasPrefix(b, "agent-") && len(b) > len("agent-") {
+		_, _, d2 := project.IsData2Worktree(cwd)
+		if d2 || strings.Contains(cwd, "/.claude/worktrees/agent-") {
+			return strings.TrimPrefix(b, "agent-")
+		}
 	}
 	return ""
 }
