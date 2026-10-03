@@ -99,7 +99,7 @@ func hasRef(rs []resourceTouch, ref, intent string) bool {
 	return false
 }
 
-func TestResources_LargeWriteKeepsFileRefWhileSummaryLosesIt(t *testing.T) {
+func TestResources_LargeWriteKeepsFileRefAndSummaryPath(t *testing.T) {
 	get := capturePublish(t)
 	main, _ := repoFixture(t, "myrepo")
 	target := filepath.Join(main, "pkg", "big.go")
@@ -114,8 +114,8 @@ func TestResources_LargeWriteKeepsFileRefWhileSummaryLosesIt(t *testing.T) {
 	}
 	p := evs[0].payload
 	t.Logf("example activity event: %s", evs[0].raw)
-	if strings.Contains(p["tool_summary"].(string), "file_path") {
-		t.Fatalf("precondition: truncated summary unexpectedly kept file_path (defect fixed elsewhere?)")
+	if !strings.Contains(p["tool_summary"].(string), target) {
+		t.Fatalf("summary lost file_path: %v", p["tool_summary"])
 	}
 	raw, _ := json.Marshal(p["resources"])
 	var rs []resourceTouch

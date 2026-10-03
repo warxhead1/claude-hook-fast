@@ -39,10 +39,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -266,8 +268,8 @@ func extractToolErrorType(raw json.RawMessage) string {
 		return ""
 	}
 	// Prefer an explicit "type" field if present and non-empty.
-	if t, ok := m["type"].(string); ok && t != "" && t != "tool_result" {
-		return truncate(t, 64)
+	if t, ok := m["type"].(string); ok && t != "" && t != "tool_result" && verbChars.MatchString(t) {
+		return t
 	}
 	// Fall back to "error" as a generic label.
 	return "error"
@@ -1318,9 +1320,8 @@ func extractToolAction(toolName string, rawInput json.RawMessage) (summary, deta
 		if path == "" {
 			path = str("path")
 		}
-		content := str("content")
 		summary = "Write: " + filepath.Base(path)
-		detail = path + "\n" + truncate(content, 300)
+		detail = path
 		return
 
 	case "Read":
@@ -1405,130 +1406,168 @@ func truncate(s string, max int) string {
 	return string(runes[:max])
 }
 
-// largeInputTools carry semantically-rich, multi-KB tool_input (a dispatch
-// prompt) — for these we keep a bigger tool_summary so the dispatched directive
-// is visible on the bus, not clipped to its opening line. Ordinary tool inputs
-// (Bash/Read/Edit) are compact JSON that fits in the default bound, so a global
-// raise would just waste bytes. Empirically (dispatch-observability-audit): only
-// ~0.7% of activity events are dispatches; raising just these 200->1000 costs
-// ~0.08% of debug.jsonl growth while lifting prompt-byte capture 5%->25%.
-var largeInputTools = map[string]bool{"Agent": true, "Task": true, "Workflow": true}
+// Activity summaries are whitelists of metadata: paths, byte lengths, dispatch
+// labels, command verbs. File bodies, tool output and dispatch prompts never
+// enter them.
 
-const (
-	toolSummaryBound      = 200  // default: compact tool inputs
-	toolSummaryBoundLarge = 1000 // dispatch prompts (largeInputTools)
-)
+// maxActivityVerbs caps how many command verbs a Bash summary lists.
+const maxActivityVerbs = 8
 
-// boundToolSummary picks the bound from the tool name, then summarizes.
-func boundToolSummary(toolName string, raw json.RawMessage) string {
-	n := toolSummaryBound
-	if largeInputTools[toolName] {
-		n = toolSummaryBoundLarge
-		if s, ok := boundDispatchSummary(raw, n); ok {
-			return s
-		}
-	}
-	return boundedToolSummaryN(raw, n)
-}
-
-// dispatchBulkFields are the free-text fields of a dispatch input. Keys marshal
-// alphabetically, so a raw prefix cut lands inside "prompt" and drops every key
-// after it (run_in_background, subagent_type) — the consumer then cannot tell
-// which agent type or tier was dispatched. Trimming only the bulk field keeps
-// the summary valid JSON with every short field intact.
-var dispatchBulkFields = []string{"prompt", "script"}
-
-// boundDispatchSummary shortens the bulk text field so the compact JSON fits in
-// n bytes. ok is false when the input is not an object or the short fields alone
-// exceed n; the caller then falls back to a plain prefix cut.
-func boundDispatchSummary(raw json.RawMessage, n int) (string, bool) {
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return "", false
-	}
-	full, err := json.Marshal(m)
+func marshalSummary(m map[string]any) string {
+	buf, err := json.Marshal(m)
 	if err != nil {
-		return "", false
+		return ""
 	}
-	if len(full) <= n {
-		return string(full), true
-	}
-	for _, k := range dispatchBulkFields {
-		text, isStr := m[k].(string)
-		if !isStr {
-			continue
-		}
-		runes := []rune(text)
-		m[k] = ""
-		base, err := json.Marshal(m)
-		if err != nil || len(base) > n {
-			m[k] = text
-			continue
-		}
-		keep := n - len(base)
-		if keep > len(runes) {
-			keep = len(runes)
-		}
-		for keep >= 0 {
-			m[k] = string(runes[:keep])
-			buf, err := json.Marshal(m)
-			if err != nil {
-				return "", false
-			}
-			if len(buf) <= n {
-				return string(buf), true
-			}
-			keep -= len(buf) - n
-		}
-	}
-	return "", false
+	return string(buf)
 }
 
-// boundedToolSummary returns the first 200 chars of the compacted tool_input.
-// Retained for callers that don't vary by tool; equivalent to the default bound.
-func boundedToolSummary(raw json.RawMessage) string {
-	return boundedToolSummaryN(raw, toolSummaryBound)
-}
-
-// boundedToolSummaryN returns the first n chars of the compacted tool_input.
+// boundToolSummary returns the compact JSON metadata summary for a tool input.
 // Empty when no input was supplied.
-func boundedToolSummaryN(raw json.RawMessage, n int) string {
+func boundToolSummary(toolName string, raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var v any
-	compact := []byte(raw)
-	if err := json.Unmarshal(raw, &v); err == nil {
-		if buf, err := json.Marshal(v); err == nil {
-			compact = buf
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return marshalSummary(map[string]any{"input_bytes": len(raw)})
+	}
+	str := func(k string) (string, bool) { s, ok := m[k].(string); return s, ok }
+	out := map[string]any{}
+	putLen := func(dst, src string) {
+		if s, ok := str(src); ok {
+			out[dst] = len(s)
 		}
 	}
-	if len(compact) > n {
-		return string(compact[:n])
+	putPath := func(keys ...string) {
+		for _, k := range keys {
+			if s, ok := str(k); ok && s != "" {
+				out[k] = s
+				return
+			}
+		}
 	}
-	return string(compact)
+	switch toolName {
+	case "Write":
+		putPath("file_path", "path")
+		putLen("content_bytes", "content")
+	case "Edit":
+		putPath("file_path", "path")
+		putLen("old_string_bytes", "old_string")
+		putLen("new_string_bytes", "new_string")
+	case "MultiEdit":
+		putPath("file_path", "path")
+		if edits, ok := m["edits"].([]any); ok {
+			var oldB, newB int
+			for _, e := range edits {
+				if em, ok := e.(map[string]any); ok {
+					if s, ok := em["old_string"].(string); ok {
+						oldB += len(s)
+					}
+					if s, ok := em["new_string"].(string); ok {
+						newB += len(s)
+					}
+				}
+			}
+			out["edits"] = len(edits)
+			out["old_string_bytes"] = oldB
+			out["new_string_bytes"] = newB
+		}
+	case "NotebookEdit":
+		putPath("notebook_path", "file_path")
+		putLen("new_source_bytes", "new_source")
+	case "Read":
+		putPath("file_path", "path")
+		for _, k := range []string{"offset", "limit"} {
+			if v, ok := m[k].(float64); ok {
+				out[k] = v
+			}
+		}
+	case "Bash":
+		if c, ok := str("command"); ok {
+			out["command"] = bashVerbs(c)
+			out["command_bytes"] = len(c)
+		}
+	case "Agent", "Task", "Workflow":
+		for _, k := range []string{"description", "subagent_type", "model", "name"} {
+			if s, ok := str(k); ok {
+				out[k] = truncate(s, 300)
+			}
+		}
+		if v, ok := m["run_in_background"].(bool); ok {
+			out["run_in_background"] = v
+		}
+		putLen("prompt_bytes", "prompt")
+		putLen("script_bytes", "script")
+	case "Glob":
+		if s, ok := str("pattern"); ok {
+			out["pattern"] = truncate(s, 200)
+		}
+		putPath("path")
+	case "Grep":
+		putPath("path")
+		putLen("pattern_bytes", "pattern")
+	case "WebFetch":
+		if s, ok := str("url"); ok {
+			out["url"] = stripURLSecrets(s)
+		}
+	case "WebSearch":
+		putLen("query_bytes", "query")
+	default:
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out["input_keys"] = keys
+		out["input_bytes"] = len(raw)
+	}
+	return marshalSummary(out)
 }
 
-// boundedToolResponseSummary returns the first 300 chars of the compacted
-// tool_response. Returns "" for nil, empty, JSON null, empty object or empty
-// array — callers rely on the empty string to omit the field via
-// publishNbusEnvelope's elision loop.
+// bashVerbs reduces a shell command to the executable names of its segments.
+// Env assignments, arguments, flags and heredoc bodies are dropped, so a
+// credential passed inline never reaches the bus.
+func bashVerbs(cmd string) string {
+	var verbs []string
+	seen := map[string]bool{}
+	for _, seg := range splitShell(cmd) {
+		v, _ := leadingVerb(seg)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		verbs = append(verbs, v)
+		if len(verbs) == maxActivityVerbs {
+			break
+		}
+	}
+	return strings.Join(verbs, " ")
+}
+
+// stripURLSecrets keeps scheme, host and path; userinfo, query and fragment go.
+func stripURLSecrets(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Hostname() + u.Path
+}
+
+// boundedToolResponseSummary reports only the size and error flag of a tool
+// response. Empty for nil, empty, JSON null, empty object or empty array —
+// callers rely on the empty string to omit the field.
 func boundedToolResponseSummary(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	s := strings.TrimSpace(string(raw))
-	switch s {
+	switch strings.TrimSpace(string(raw)) {
 	case "", "null", "{}", "[]":
 		return ""
 	}
-	// Compact the JSON to remove unnecessary whitespace.
-	var v any
-	compact := []byte(raw)
-	if err := json.Unmarshal(raw, &v); err == nil {
-		if buf, err := json.Marshal(v); err == nil {
-			compact = buf
-		}
+	isErr := false
+	var m map[string]any
+	if json.Unmarshal(raw, &m) == nil {
+		isErr, _ = m["is_error"].(bool)
 	}
-	return truncate(string(compact), 300)
+	return marshalSummary(map[string]any{"bytes": len(raw), "is_error": isErr})
 }
