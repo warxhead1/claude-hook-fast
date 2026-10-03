@@ -113,6 +113,7 @@ func TestResources_LargeWriteKeepsFileRefWhileSummaryLosesIt(t *testing.T) {
 		t.Fatalf("want one activity event, got %+v", evs)
 	}
 	p := evs[0].payload
+	t.Logf("example activity event: %s", evs[0].raw)
 	if strings.Contains(p["tool_summary"].(string), "file_path") {
 		t.Fatalf("precondition: truncated summary unexpectedly kept file_path (defect fixed elsewhere?)")
 	}
@@ -472,6 +473,7 @@ func TestAssignment_EndToEndPublish(t *testing.T) {
 		t.Fatalf("events: %+v", evs)
 	}
 	p := evs[0].payload
+	t.Logf("example assignment event: %s", evs[0].raw)
 	if p["assignment_id"] != "toolu_42" || p["assigned_by"] != "sess-1" || p["title"] != "Implement lane O1a" {
 		t.Fatalf("fields: %v", p)
 	}
