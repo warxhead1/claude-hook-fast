@@ -69,6 +69,8 @@ func main() {
 		cmdNbusStopFailure()
 	case "nbus-session-end":
 		cmdNbusSessionEnd()
+	case "nbus-assignment":
+		cmdNbusAssignment()
 	case "nbus-subagent-lifecycle":
 		cmdNbusSubagentLifecycle()
 	case "steering-poll":

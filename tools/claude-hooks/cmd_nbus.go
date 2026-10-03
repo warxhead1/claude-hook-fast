@@ -121,6 +121,9 @@ func baseEnvelope(in event.HookInput, eventName, agentKind string) (map[string]a
 	return env, can
 }
 
+// nbusPublish is the detached publisher; tests replace it to capture payloads.
+var nbusPublish = nbuspub.PublishAsync
+
 // publishNbusEnvelope drops empty values (mirrors the bash
 // `with_entries(select(.value != "" and .value != null))`) and hands
 // off to a detached publish worker — the hook never waits on nervous.
@@ -140,11 +143,11 @@ func publishNbusEnvelope(channel string, env map[string]any, sourceProject strin
 		hooklog.Writef("nbus marshal %s: %v", channel, err)
 		return
 	}
-	_ = nbuspub.PublishAsync(channel, nbuspub.SourceTag(sourceProject), string(body))
+	_ = nbusPublish(channel, nbuspub.SourceTag(sourceProject), string(body))
 }
 
 // cmdNbusActivity replaces zzy-nbus-activity.sh — PostToolUse → bus.agent.activity.v1.
-// Skips Grep/Glob to keep the signal lean.
+// Grep/Glob are emitted (as read touches) without tool output or token fields.
 //
 // Enrichment (additive, all fields optional so existing consumers are unaffected):
 //   - tool_use_id        — stable tool-invocation ID (from hook stdin, Claude Code ~2.0+)
@@ -164,15 +167,8 @@ func cmdNbusActivity() {
 	if in.ToolName == "" {
 		return
 	}
-	switch in.ToolName {
-	case "Grep", "Glob":
-		return
-	}
-
-	env, can := baseEnvelope(in, "tool_call", in.AgentKind())
-	env["tool_name"] = in.ToolName
-	env["tool_summary"] = boundToolSummary(in.ToolName, in.ToolInput)
-	env["tool_response_summary"] = boundedToolResponseSummary(in.ToolResponse)
+	env, can := buildActivityEnvelope(in)
+	searchTool := in.ToolName == "Grep" || in.ToolName == "Glob"
 
 	// --- Enrichment block ---
 
@@ -191,7 +187,7 @@ func cmdNbusActivity() {
 
 	// Token usage: cheap tail-read of the transcript (last 8 KB only).
 	// Falls through silently if the transcript is unavailable or stale.
-	if in.TranscriptPath != "" {
+	if in.TranscriptPath != "" && !searchTool {
 		if u := transcript.LatestUsage(in.TranscriptPath); !u.IsZero() {
 			env["input_tokens"] = u.InputTokens
 			env["output_tokens"] = u.OutputTokens
@@ -238,6 +234,23 @@ func cmdNbusActivity() {
 		}
 		publishNbusEnvelope(chanSessionQuestionResponded, renv, can)
 	}
+}
+
+// buildActivityEnvelope assembles the tool-derived part of an activity event.
+// resources is computed from the full tool input, independent of the bounded
+// tool_summary. Grep/Glob carry no tool_response_summary: their output is
+// match bodies, not metadata.
+func buildActivityEnvelope(in event.HookInput) (map[string]any, string) {
+	env, can := baseEnvelope(in, "tool_call", in.AgentKind())
+	env["tool_name"] = in.ToolName
+	env["tool_summary"] = boundToolSummary(in.ToolName, in.ToolInput)
+	if in.ToolName != "Grep" && in.ToolName != "Glob" {
+		env["tool_response_summary"] = boundedToolResponseSummary(in.ToolResponse)
+	}
+	if res := extractResources(in.ToolName, in.EffectiveCWD(), in.ToolInput); len(res) > 0 {
+		env["resources"] = res
+	}
+	return env, can
 }
 
 // extractToolErrorType returns a short label from a tool_response error payload.
