@@ -129,57 +129,6 @@ func TestSteeringTargetID(t *testing.T) {
 	}
 }
 
-func TestBoundedToolSummary(t *testing.T) {
-	long := strings.Repeat("a", 800)
-	raw := []byte(`{"command":"` + long + `"}`)
-	got := boundedToolSummary(raw)
-	if len(got) > 200 {
-		t.Errorf("len = %d, want ≤ 200", len(got))
-	}
-	if got := boundedToolSummary(nil); got != "" {
-		t.Errorf("empty input should yield empty summary, got %q", got)
-	}
-}
-
-func TestBoundToolSummary_TargetsDispatchTools(t *testing.T) {
-	long := strings.Repeat("a", 3000)
-	raw := []byte(`{"prompt":"` + long + `"}`)
-	// Dispatch tools get the larger bound; ordinary tools keep 200.
-	for _, tool := range []string{"Agent", "Task", "Workflow"} {
-		if got := len(boundToolSummary(tool, raw)); got != toolSummaryBoundLarge {
-			t.Errorf("%s: len = %d, want %d", tool, got, toolSummaryBoundLarge)
-		}
-	}
-	// A dispatch whose prompt overflows keeps every short field and stays valid JSON.
-	agentRaw, _ := json.Marshal(map[string]any{
-		"description": "d", "model": "sonnet", "prompt": "é\"" + long,
-		"run_in_background": true, "subagent_type": "Explore",
-	})
-	got := boundToolSummary("Agent", agentRaw)
-	var m map[string]any
-	if err := json.Unmarshal([]byte(got), &m); err != nil {
-		t.Fatalf("dispatch summary is not valid JSON: %v (%q)", err, got)
-	}
-	if len(got) > toolSummaryBoundLarge || m["subagent_type"] != "Explore" || m["model"] != "sonnet" || m["run_in_background"] != true {
-		t.Errorf("dispatch summary lost short fields or overflowed: len=%d %v", len(got), m)
-	}
-	// Bulk field that is not a string, or short fields alone over the bound: prefix cut.
-	huge, _ := json.Marshal(map[string]any{"description": long, "prompt": 7})
-	if got := boundToolSummary("Agent", huge); len(got) != toolSummaryBoundLarge {
-		t.Errorf("fallback len = %d, want %d", len(got), toolSummaryBoundLarge)
-	}
-	for _, tool := range []string{"Bash", "Read", "Edit", ""} {
-		if got := len(boundToolSummary(tool, raw)); got != toolSummaryBound {
-			t.Errorf("%s: len = %d, want %d", tool, got, toolSummaryBound)
-		}
-	}
-	// A short input is returned whole regardless of tool.
-	short := []byte(`{"command":"ls"}`)
-	if got := boundToolSummary("Agent", short); len(got) != len(short) {
-		t.Errorf("short input should pass through, got %d want %d", len(got), len(short))
-	}
-}
-
 func TestBaseEnvelope_StampsManagedByOrca(t *testing.T) {
 	in := event.HookInput{SessionID: "s-orca", CWD: t.TempDir(), TranscriptPath: "/tmp/conv-oo.jsonl"}
 
@@ -309,7 +258,7 @@ func TestCmdNbusActivity_EmitsTokenFields(t *testing.T) {
 
 	env, _ := baseEnvelope(in, "tool_call", in.AgentKind())
 	env["tool_name"] = in.ToolName
-	env["tool_summary"] = boundedToolSummary(in.ToolInput)
+	env["tool_summary"] = boundToolSummary(in.ToolName, in.ToolInput)
 	env["tool_response_summary"] = boundedToolResponseSummary(in.ToolResponse)
 	if in.ToolUseID != "" {
 		env["tool_use_id"] = in.ToolUseID
