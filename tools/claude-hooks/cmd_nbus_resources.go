@@ -359,7 +359,14 @@ func splitShell(cmd string) [][]shTok {
 			}
 		case ' ', '\t':
 			flushWord()
-		case '\n', ';', '|', '&':
+		case '&':
+			// `2>&1`, `<&0` and `&>file` are redirections, not separators.
+			if (i > 0 && (cmd[i-1] == '>' || cmd[i-1] == '<')) || (i+1 < len(cmd) && cmd[i+1] == '>') {
+				word, inWord = append(word, c), true
+				continue
+			}
+			flushSeg()
+		case '\n', ';', '|':
 			flushSeg()
 		case '<':
 			if i+1 < len(cmd) && cmd[i+1] == '<' {
@@ -395,7 +402,7 @@ var envAssign = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 var verbWrappers = map[string]bool{"env": true, "time": true, "nohup": true, "nice": true, "command": true}
 
-var verbChars = regexp.MustCompile(`^[A-Za-z0-9._+-]{1,32}$`)
+var verbChars = regexp.MustCompile(`^[A-Za-z0-9._+][A-Za-z0-9._+-]{0,31}$`)
 
 // leadingVerb returns the executable name and the args after it.
 func leadingVerb(seg []shTok) (string, []shTok) {
@@ -403,6 +410,10 @@ func leadingVerb(seg []shTok) (string, []shTok) {
 	for i < len(seg) {
 		t := seg[i]
 		if envAssign.MatchString(t.s) {
+			if strings.Contains(t.s, "$(") || strings.Contains(t.s, "`") {
+				// A substituted value such as `X=$(cmd -v y)` hides the real verb.
+				return "", nil
+			}
 			i++
 			continue
 		}
