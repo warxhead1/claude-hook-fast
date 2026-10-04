@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/warxhead1/claude-hook-fast/tools/claude-hooks/internal/hookio"
 )
@@ -126,6 +127,7 @@ func cmdWorktreeWriteGuard() {
 			fmt.Sprintf("  Tool:   %s", input.ToolName),
 			fmt.Sprintf("  Path:   %s", target),
 			fmt.Sprintf("  Repo:   %s  (WAVE FREEZE active)", root),
+			"  " + strings.ReplaceAll(freezeOwnerLine(root, input.SessionID, isAgent), "\n", "\n  "),
 			"",
 			"A dispatch wave is live for this repo: agents may be running whose",
 			"isolation the harness silently dropped, so ALL writes to the shared",

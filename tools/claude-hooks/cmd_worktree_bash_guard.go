@@ -94,6 +94,7 @@ type bashViolation struct {
 	Why  string
 	Seg  string
 	Rule string // "subagent" or "wave-freeze" — same field style as write-guard's rule=
+	Root string // primary checkout the violation targets
 }
 
 func cmdWorktreeBashGuard() {
@@ -129,6 +130,9 @@ func cmdWorktreeBashGuard() {
 	for _, v := range violations {
 		fmt.Fprintf(os.Stderr, "  Segment: %s\n  Reason:  %s\n\n", v.Seg, v.Why)
 	}
+	for _, line := range freezeOwnerLines(violations, input.SessionID, isAgent) {
+		fmt.Fprintln(os.Stderr, line)
+	}
 	fmt.Fprint(os.Stderr,
 		"Subagents never mutate the shared checkout of ANY repo, and during a\n"+
 			"wave freeze nobody does. Work in your isolated worktree with\n"+
@@ -138,6 +142,24 @@ func cmdWorktreeBashGuard() {
 			"Lead: lift with `wave-freeze off <repo-root>` — inline in the same\n"+
 			"command works: `wave-freeze off <root> && git merge ...`.\n")
 	hookExit(2)
+}
+
+// freezeOwnerLines returns one deduped owner line per frozen root named by a
+// wave-freeze violation.
+func freezeOwnerLines(violations []bashViolation, session string, isAgent bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range violations {
+		if v.Rule != "wave-freeze" || v.Root == "" || seen[v.Root] {
+			continue
+		}
+		seen[v.Root] = true
+		out = append(out, freezeOwnerLine(v.Root, session, isAgent))
+	}
+	if len(out) > 0 {
+		out = append(out, "")
+	}
+	return out
 }
 
 // bashGuardRules collapses one or more violations' Rule fields into a
@@ -208,6 +230,7 @@ func bashGuardViolations(command, startCwd string, isAgent bool) []bashViolation
 					target, root, why),
 				Seg:  seg,
 				Rule: why,
+				Root: root,
 			})
 		}
 	}
@@ -343,6 +366,7 @@ func bashGuardViolations(command, startCwd string, isAgent bool) []bashViolation
 							sub, root, why),
 						Seg:  seg,
 						Rule: why,
+						Root: root,
 					})
 				}
 			}
