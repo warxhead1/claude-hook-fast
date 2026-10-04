@@ -73,15 +73,68 @@ func dispatchPrimaryRootOf(path string) (string, bool) {
 	return "", false
 }
 
-func setFreeze(root, sessionID, tool string) bool {
+func setFreeze(root, sessionID, tool, description string) bool {
 	if err := os.MkdirAll(wgFreezeDir(), 0o755); err != nil {
 		return false
 	}
-	payload, _ := json.Marshal(map[string]string{
+	m := map[string]any{
 		"repo": root, "set_by": "dispatch-freeze-guard", "tool": tool,
 		"session_id": sessionID, "at": time.Now().Format("2006-01-02T15:04:05"),
-	})
+		"description": truncateRunes(description, 120),
+		"claude_pid":  currentClaudePID(),
+	}
+	if h := os.Getenv("ORCA_TERMINAL_HANDLE"); h != "" {
+		m["orca_terminal_handle"] = h
+		m["orca_worktree_id"] = os.Getenv("ORCA_WORKTREE_ID")
+		m["orca_tab_id"] = os.Getenv("ORCA_TAB_ID")
+		t, p := orcaTerminalInfo(h)
+		if t != "" {
+			m["title"] = t
+		}
+		if p != "" {
+			m["orca_worktree_path"] = p
+		}
+	}
+	payload, _ := json.Marshal(m)
 	return os.WriteFile(freezeMarkerPath(root), payload, 0o644) == nil
+}
+
+// orcaTerminalInfo looks up a terminal's title and worktree path once, at
+// freeze time. Best-effort with a short timeout; empty on any failure.
+// Overridable for tests.
+var orcaTerminalInfo = func(handle string) (title, worktreePath string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "orca-ide", "terminal", "list", "--json").Output()
+	if err != nil {
+		return "", ""
+	}
+	var r struct {
+		Result struct {
+			Terminals []struct {
+				Handle       string `json:"handle"`
+				Title        string `json:"title"`
+				WorktreePath string `json:"worktreePath"`
+			} `json:"terminals"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(out, &r) != nil {
+		return "", ""
+	}
+	for _, t := range r.Result.Terminals {
+		if t.Handle == handle {
+			return t.Title, t.WorktreePath
+		}
+	}
+	return "", ""
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) > n {
+		return string(r[:n])
+	}
+	return string(r)
 }
 
 // mintWorktree mints a sanctioned worktree in a foreign repo via `xwt new`
@@ -160,6 +213,7 @@ func cmdDispatchFreezeGuard() {
 	}
 	prompt, _ := ti["prompt"].(string)
 	script, _ := ti["script"].(string)
+	description, _ := ti["description"].(string)
 	text := prompt
 	if text == "" {
 		text = script
@@ -303,7 +357,7 @@ func cmdDispatchFreezeGuard() {
 	}
 	var frozen []string
 	for r := range roots {
-		if setFreeze(r, input.SessionID, input.ToolName) {
+		if setFreeze(r, input.SessionID, input.ToolName, description) {
 			frozen = append(frozen, r)
 		}
 	}

@@ -16,10 +16,12 @@ package main
 // Kill switch for the whole family: WORKTREE_GUARD_DISABLE=1.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -182,6 +184,131 @@ func freezeActive(root string) bool {
 		return false
 	}
 	return true
+}
+
+// freezeMarker is the JSON a freeze marker carries. Older markers (written
+// by the wave-freeze CLI) may lack session_id and description.
+type freezeMarker struct {
+	Repo        string `json:"repo"`
+	SessionID   string `json:"session_id"`
+	SetBy       string `json:"set_by"`
+	Tool        string `json:"tool"`
+	At          string `json:"at"`
+	Description string `json:"description"`
+	ClaudePID   int    `json:"claude_pid"`
+
+	OrcaTerminalHandle string `json:"orca_terminal_handle"`
+	OrcaWorktreeID     string `json:"orca_worktree_id"`
+	OrcaWorktreePath   string `json:"orca_worktree_path"`
+	OrcaTerminalTitle  string `json:"title"`
+}
+
+// readFreezeMarker returns the parsed marker for root; ok=false when the
+// file is missing or not JSON.
+func readFreezeMarker(root string) (freezeMarker, bool) {
+	var m freezeMarker
+	b, err := os.ReadFile(freezeMarkerPath(root))
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		return m, false
+	}
+	return m, true
+}
+
+// freezeOwnerLine renders who holds the freeze on root, relative to the
+// reader. currentSession is the hook input's session_id (a subagent carries
+// its parent's); isSubagent says the reader is a dispatched agent. Matching
+// is by session_id, or by a live claude process id (session_id changes on
+// compaction, the process does not). Renders from the marker only.
+func freezeOwnerLine(root, currentSession string, isSubagent bool) string {
+	m, ok := readFreezeMarker(root)
+	if !ok || (m.SessionID == "" && m.ClaudePID == 0) {
+		who := "unknown (marker has no session_id)"
+		if !ok {
+			who = "unknown (marker unreadable)"
+		}
+		return fmt.Sprintf("Freeze owner: %s — marker %s. Do not assume it is yours; "+
+			"work in a worktree.", who, freezeMarkerPath(root))
+	}
+	meta := fmt.Sprintf("set %s by %s", orDash(m.At), orDash(m.SetBy))
+	if m.Description != "" {
+		meta += fmt.Sprintf(" for '%s'", m.Description)
+	}
+	sessMatch := currentSession != "" && m.SessionID == currentSession
+	pidMatch := m.ClaudePID > 0 && m.ClaudePID == currentClaudePID() && pidAlive(m.ClaudePID)
+	var line string
+	switch {
+	case !sessMatch && !pidMatch:
+		line = fmt.Sprintf("Freeze owner: another session (%s), %s. Not yours — "+
+			"do not lift it; work in a worktree.", orDash(m.SessionID), meta)
+	case isSubagent:
+		line = fmt.Sprintf("Freeze owner: YOUR PARENT (the lead session that dispatched you; "+
+			"%s), %s — escalate to it, do not lift.", orDash(m.SessionID), meta)
+	case sessMatch:
+		line = fmt.Sprintf("Freeze owner: YOU (this session, %s), %s. It is yours — "+
+			"lift it with `wave-freeze off %s` once your wave's work is integrated.",
+			m.SessionID, meta, root)
+	default:
+		line = fmt.Sprintf("Freeze owner: YOU (this session; same claude process %d, "+
+			"session id changed since it was set: %s -> %s), %s. It is yours — "+
+			"lift it with `wave-freeze off %s` once your wave's work is integrated.",
+			m.ClaudePID, orDash(m.SessionID), orDash(currentSession), meta, root)
+	}
+	if m.OrcaTerminalHandle != "" {
+		title := m.OrcaTerminalTitle
+		if title == "" {
+			title = "(untitled)"
+		}
+		line += fmt.Sprintf("\nOrca terminal: %s [%s]", title, m.OrcaTerminalHandle)
+		if m.OrcaWorktreePath != "" {
+			line += " in " + m.OrcaWorktreePath
+		}
+	}
+	return line
+}
+
+// currentClaudePID identifies the claude CLI process, which survives context
+// compaction (session_id does not). $CLAUDE_PID is exported by the CLI; when
+// absent, walk ancestors for a process named claude, then fall back to the
+// parent pid. Overridable for tests.
+var currentClaudePID = func() int {
+	if n, err := strconv.Atoi(os.Getenv("CLAUDE_PID")); err == nil && n > 0 {
+		return n
+	}
+	pid := os.Getppid()
+	for p, i := pid, 0; p > 1 && i < 8; i++ {
+		comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", p))
+		if err != nil {
+			break
+		}
+		if strings.TrimSpace(string(comm)) == "claude" {
+			return p
+		}
+		st, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", p))
+		if err != nil {
+			break
+		}
+		// ppid is the field after the ")" closing comm and the state char.
+		str := string(st)
+		f := strings.Fields(str[strings.LastIndex(str, ")")+1:])
+		if len(f) < 2 {
+			break
+		}
+		next, _ := strconv.Atoi(f[1])
+		p = next
+	}
+	return pid
+}
+
+func pidAlive(pid int) bool {
+	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
+	return err == nil
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "?"
+	}
+	return s
 }
 
 // allowlisted: paths every guard lets through inside a primary checkout —
