@@ -194,6 +194,23 @@ type coordLedger struct {
 	RunID   string                `json:"run_id"`
 	Updated string                `json:"updated"`
 	Lanes   map[string]*coordLane `json:"lanes"`
+	Auto    []coordAutoRecord     `json:"auto_replies,omitempty"`
+}
+
+// coordAutoRecord is one reply sent by a standing order.
+type coordAutoRecord struct {
+	MessageID string `json:"message_id"`
+	Lane      string `json:"lane"`
+	Order     string `json:"order"`
+	At        string `json:"at"`
+}
+
+func (l *coordLedger) recordAuto(m coordMsg, order string) {
+	l.Auto = append(l.Auto, coordAutoRecord{MessageID: m.ID, Lane: m.From, Order: order,
+		At: time.Now().UTC().Format(time.RFC3339)})
+	if len(l.Auto) > 50 {
+		l.Auto = l.Auto[len(l.Auto)-50:]
+	}
 }
 
 func coordLoadLedger(dir, runID string) *coordLedger {

@@ -1,0 +1,15 @@
+# <repo>/.orca/standing-orders.toml (or <state>/<run_id>/standing-orders.toml)
+# Read by coord-wake. See docs/coordinator-inbox.md, components C and D.
+
+# Branch the landing verdict diffs and merge-tests worker_done heads against.
+integration_branch = "main"
+
+# auto = true: coord-wake replies itself and the message never wakes Claude.
+# auto = false: the wake block carries "standing order <id> suggests: <reply>".
+# match is a Go regexp over subject + "\n" + body. types defaults to ["question"].
+[[order]]
+id = "bbslot-gpu-window"
+match = '(?i)(gpu|cuda|vram|solo|ue).{0,40}(window|slot|lease|hold)'
+types = ["question", "escalation"]
+reply = "Use bbslot: 'bbslot <ue|gpu|cuda|blender|solo> -- <cmd>' at /home/eric/data2/orca/unreal-battlebots-gamedev/bin/bbslot. It is a fair FIFO queue; take one hold per batch, 10 min max; release between steps."
+auto = true

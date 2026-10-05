@@ -138,6 +138,8 @@ func main() {
 		cmdIdleStopCheck()
 	case "coord-wake":
 		cmdCoordWake()
+	case "coord-stop-gate":
+		cmdCoordStopGate()
 	case "coord-status":
 		cmdCoordStatus()
 	default:

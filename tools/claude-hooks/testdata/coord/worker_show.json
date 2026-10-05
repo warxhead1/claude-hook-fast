@@ -1,0 +1,26 @@
+{
+  "id": "redacted",
+  "ok": true,
+  "result": {
+    "dispatch": {
+      "id": "ctx_a9398b64e319",
+      "runId": "run_f929afbba020",
+      "taskId": "task_0be552d6d028",
+      "assigneeHandle": "term_39b64a39-11fd-4b9f-a6b7-a342d6cfdc16",
+      "status": "dispatched"
+    },
+    "worker": {
+      "dispatchId": "ctx_a9398b64e319",
+      "state": "ready",
+      "stage": "input_accepted",
+      "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-runtime",
+      "agentTerminalHandle": "term_39b64a39-11fd-4b9f-a6b7-a342d6cfdc16"
+    },
+    "terminal": {
+      "handle": "term_39b64a39-11fd-4b9f-a6b7-a342d6cfdc16",
+      "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-runtime",
+      "worktreePath": "/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-runtime",
+      "branch": "refs/heads/mal/runtime"
+    }
+  }
+}
