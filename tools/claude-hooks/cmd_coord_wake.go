@@ -33,6 +33,7 @@ type coordConfig struct {
 	StateRoot  string
 	Slice      time.Duration // --timeout-ms per wait slice
 	MinCycle   time.Duration // floor between empty cycles (no hot loop)
+	Backoff    time.Duration // pause after orca reports a stale waiter_exists
 	WatchEvery time.Duration // ancestor-liveness poll interval
 	CacheTTL   time.Duration // run-current verdict cache
 	Ancestors  []int
@@ -62,6 +63,7 @@ func coordConfigFromEnv() coordConfig {
 		StateRoot:  coordStateRoot(),
 		Slice:      coordEnvDur("COORD_SLICE_MS", 5*time.Minute),
 		MinCycle:   coordEnvDur("COORD_MIN_CYCLE_MS", 2*time.Second),
+		Backoff:    coordEnvDur("COORD_WAITER_BACKOFF_MS", 15*time.Second),
 		WatchEvery: coordEnvDur("COORD_WATCH_MS", 5*time.Second),
 		CacheTTL:   coordEnvDur("COORD_CACHE_TTL_MS", 2*time.Minute),
 		Stderr:     os.Stderr,
@@ -179,6 +181,14 @@ func coordWake(cfg coordConfig) int {
 				msg = r.Error.Code + " " + r.Error.Message
 			}
 			if wait && strings.Contains(strings.ToLower(msg), "timed out") {
+				return &coordCheckResp{OK: true}, nil
+			}
+			// A killed waiter's server-side wait outlives its process until
+			// the slice expires; back off and retry instead of leaving the
+			// run with no waiter at all.
+			if wait && r.Error != nil && r.Error.Code == "waiter_exists" {
+				coordLog(dir, "waiter_exists; retrying in %s", cfg.Backoff)
+				time.Sleep(cfg.Backoff)
 				return &coordCheckResp{OK: true}, nil
 			}
 			return nil, fmt.Errorf("orca error: %s", msg)

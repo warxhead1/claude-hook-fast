@@ -25,6 +25,7 @@ reply) [ -f "$D/replyfail" ] && exit 1; echo '{"ok":true,"result":{}}'; exit 0;;
 check)
   [ -f "$D/fail" ] && exit 1
   case " $* " in *" --wait "*) [ -f "$D/wait" ] && sleep "$(cat "$D/wait")";; esac
+  case " $* " in *" --wait "*) if [ -f "$D/waiterexists" ]; then rm "$D/waiterexists"; [ -f "$D/later" ] && mv "$D/later" "$D/q/999.json"; echo '{"ok":false,"error":{"code":"waiter_exists","message":"Run run_x already has an active actionable waiter."}}'; exit 1; fi;; esac
   n=$(ls "$D/q" 2>/dev/null | sort | head -1)
   if [ -n "$n" ]; then cat "$D/q/$n"; rm "$D/q/$n"; else echo '{"ok":true,"result":{"runId":"run_x","messages":[],"count":0}}'; fi
   exit 0;;
@@ -325,5 +326,20 @@ func TestCoordIsSubagentInput(t *testing.T) {
 		if got := coordIsSubagentInput([]byte(c.in)); got != c.want {
 			t.Errorf("coordIsSubagentInput(%q) = %v, want %v", c.in, got, c.want)
 		}
+	}
+}
+
+func TestCoordWakeRetriesStaleWaiterExists(t *testing.T) {
+	h := newCoordHarness(t, "term_coord")
+	h.cfg.Backoff = 10 * time.Millisecond
+	_ = os.WriteFile(filepath.Join(h.dir, "waiterexists"), nil, 0o644)
+	body := fmt.Sprintf(`{"ok":true,"result":{"runId":"run_x","deliveryId":"dlv_late","messages":[%s],"count":1}}`,
+		coordMsgJSON("msg_late", "question", "term_lane", "late question", "after a stale waiter"))
+	_ = os.WriteFile(filepath.Join(h.dir, "later"), []byte(body), 0o644)
+	if got := coordWake(h.cfg); got != 2 {
+		t.Fatalf("exit %d, want 2 (wake after retrying waiter_exists); stderr=%q", got, h.errb.String())
+	}
+	if !strings.Contains(h.errb.String(), "msg_late") {
+		t.Fatalf("wake block missing msg_late: %q", h.errb.String())
 	}
 }
