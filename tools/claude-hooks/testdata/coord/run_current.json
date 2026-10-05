@@ -1,0 +1,15 @@
+{
+  "id": "2de6e069-9003-4102-9068-5ec58c1197fb",
+  "ok": true,
+  "result": {
+    "run": {
+      "id": "run_f929afbba020",
+      "objective": "BattleBots hero Blender assets (Astra xhigh): high-poly, destruction-ready hero pieces matching owner reference boards",
+      "coordinator_handle": "term_02201423-d68c-4869-ada7-4344246581c8",
+      "consumer_generation": 1,
+      "legacy": 0,
+      "created_at": "2026-10-04T06:07:36Z",
+      "updated_at": "2026-10-04T06:07:36Z"
+    }
+  }
+}
