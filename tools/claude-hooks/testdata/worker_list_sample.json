@@ -1,0 +1,236 @@
+{
+  "ok": true,
+  "result": {
+    "workers": [
+      {
+        "dispatchId": "ctx_51263aa03efe",
+        "taskId": "task_5cbf515f6011",
+        "runId": "run_f929afbba020",
+        "workerState": "ready",
+        "dispatchStatus": "dispatched",
+        "agentTerminalHandle": "term_7b7d2ecd-fb29-4756-8d4d-5c509a2fc690",
+        "terminalState": "active",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-deform-v2",
+          "releaseState": "not_requested",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_f658b77352e3",
+        "taskId": "task_c92e5b62b9d0",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_03ae4ae3-b100-4ac2-9c59-e2df84f7e8c6",
+        "terminalState": "retained",
+        "resource": {
+          "worktreeId": "d4e62e29-5596-4e17-89d9-6da648ef3125::/home/eric/data2/worktrees/hearth/gamedev-showcase-v2",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover"
+        }
+      },
+      {
+        "dispatchId": "ctx_40707bf39647",
+        "taskId": "task_d7d3b34377d9",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_d93133f2-61ac-4bc0-90fe-272ecc80eae7",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/strand-env-concepts",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_d1ad1674d50d",
+        "taskId": "task_3c7632ca5c74",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_028cabbd-5c22-40c3-a54e-d373d73611f2",
+        "terminalState": "retained",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/strand-hearth-publish",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover"
+        }
+      },
+      {
+        "dispatchId": "ctx_e18c018da3a7",
+        "taskId": "task_127dfe071152",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_457768ae-74f6-4d75-96d0-2260b9ce0a9e",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/strand-debug-views",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_bad68b45b75e",
+        "taskId": "task_fd7e66155cf7",
+        "runId": "run_f929afbba020",
+        "workerState": "failed",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_3bd4741e-e502-46b5-9f4e-054f43cf36c5",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/strand-cine-capture",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_ace7ef8d6dec",
+        "taskId": "task_5a97314254bd",
+        "runId": "run_f929afbba020",
+        "workerState": "ready",
+        "dispatchStatus": "dispatched",
+        "agentTerminalHandle": "term_18e7c338-3627-487d-b85c-bedef1b63598",
+        "terminalState": "retained",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-chunks",
+          "releaseState": "retained",
+          "retainedReason": "user_takeover"
+        }
+      },
+      {
+        "dispatchId": "ctx_faed96fd4469",
+        "taskId": "task_75a345fba832",
+        "runId": "run_f929afbba020",
+        "workerState": "ready",
+        "dispatchStatus": "dispatched",
+        "agentTerminalHandle": "term_68192ab6-03ef-4bf3-b7f2-4fde113ead6b",
+        "terminalState": "active",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-wear",
+          "releaseState": "not_requested",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_d4f2f3fc841e",
+        "taskId": "task_d5328cd305be",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_18d1942a-5ace-4b28-b760-6f66d2d6df82",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-armor-panels",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_89b5389ea804",
+        "taskId": "task_a2faec9c8531",
+        "runId": "run_f929afbba020",
+        "workerState": "failed",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_08cf4a3e-48de-41b0-91ad-ca48609753cf",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-ironclad-panels",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_a9398b64e319",
+        "taskId": "task_0be552d6d028",
+        "runId": "run_f929afbba020",
+        "workerState": "ready",
+        "dispatchStatus": "dispatched",
+        "agentTerminalHandle": "term_39b64a39-11fd-4b9f-a6b7-a342d6cfdc16",
+        "terminalState": "active",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/mal-runtime",
+          "releaseState": "not_requested",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_37691d1e6559",
+        "taskId": "task_58fdad226b6a",
+        "runId": "run_f929afbba020",
+        "workerState": "failed",
+        "dispatchStatus": "failed",
+        "agentTerminalHandle": "term_cd92e8ad-266f-4b09-896d-da42aecb5f4b",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/hero-fit-v2",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_0619b2838bac",
+        "taskId": "task_dede010a64de",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_309a92c3-1ed5-4cb6-bf53-572bcc66b1a7",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/hero-hydraulic-arm",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_2c4bab1291a2",
+        "taskId": "task_f4deb2045230",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_c41c6905-419a-438d-bb46-ba324ef37d8e",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/hero-tread-pod",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_c706e8b8c709",
+        "taskId": "task_b7916a495530",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_18d8ae8f-c58a-4ef3-ab22-52c98fd86dac",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/hero-ironclad-shell",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      },
+      {
+        "dispatchId": "ctx_159ef60cf226",
+        "taskId": "task_800c0de27a19",
+        "runId": "run_f929afbba020",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_e0b90bd2-fddc-4258-bd3c-428e08f7c9fe",
+        "terminalState": "released",
+        "resource": {
+          "worktreeId": "548a4d31-ccc4-4e82-bbdc-afb00afb1a5b::/home/eric/data2/worktrees/unreal-battlebots-gamedev/hero-spinner",
+          "releaseState": "released",
+          "retainedReason": null
+        }
+      }
+    ],
+    "counts": {
+      "active": 3,
+      "retained": 3,
+      "released": 10
+    }
+  }
+}

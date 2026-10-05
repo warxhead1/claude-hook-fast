@@ -106,14 +106,62 @@ func coordStopGate(cfg coordConfig, out io.Writer, stopHookActive bool) int {
 		return 0
 	}
 	dir := filepath.Join(cfg.StateRoot, coordSafeName(runID))
+	reasons := []string{}
+	if r := coordWokenBlock(ctx, cfg, runID, dir); r != "" {
+		reasons = append(reasons, r)
+	}
+	if r := coordReapBlock(cfg, runID, dir); r != "" {
+		reasons = append(reasons, r)
+	}
+	if len(reasons) == 0 {
+		return 0
+	}
+	if b, err := json.Marshal(map[string]string{"decision": "block", "reason": strings.Join(reasons, "\n")}); err == nil {
+		_, _ = fmt.Fprintln(out, string(b))
+	}
+	return 0
+}
+
+// coordReapBlock runs coord-reap (hard 20 s budget, fails open) and returns a
+// block reason for a set of festering lanes not yet blocked on, or "".
+func coordReapBlock(cfg coordConfig, runID, dir string) (reason string) {
+	defer func() {
+		if r := recover(); r != nil {
+			coordLog(dir, "reap fail-open: panic %v", r)
+			reason = ""
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), coordReapBudget)
+	defer cancel()
+	res := coordReap(ctx, cfg, runID, dir, "", true)
+	items := res.Festering
+	if res.Mode == "suggest" {
+		items = append(append([]coordReapItem{}, res.Reapable...), items...)
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	hash := coordReapSetHash(items)
+	p := filepath.Join(dir, "reap-blocked")
+	if b, err := os.ReadFile(p); err == nil && strings.TrimSpace(string(b)) == hash {
+		return ""
+	}
+	_ = coordWriteAtomic(p, []byte(hash))
+	coordLog(dir, "reap block set=%s", hash)
+	return coordReapBlockReason(items, time.Now())
+}
+
+// coordWokenBlock returns the block reason for unanswered lane questions not
+// yet blocked on, or "". Fails open.
+func coordWokenBlock(ctx context.Context, cfg coordConfig, runID, dir string) string {
 	woken := coordLoadWoken(dir)
 	if len(woken.Items) == 0 {
-		return 0
+		return ""
 	}
 	replied, err := coordRepliedIDs(ctx, cfg, runID)
 	if err != nil {
 		coordLog(dir, "stop-gate fail-open: %v", err)
-		return 0
+		return ""
 	}
 	var open []coordWokenItem
 	for _, it := range woken.Items {
@@ -125,7 +173,7 @@ func coordStopGate(cfg coordConfig, out io.Writer, stopHookActive bool) int {
 		coordWokenFile{Items: open}.save(dir)
 	}
 	if len(open) == 0 {
-		return 0
+		return ""
 	}
 	ids := make([]string, len(open))
 	for i, it := range open {
@@ -136,15 +184,11 @@ func coordStopGate(cfg coordConfig, out io.Writer, stopHookActive bool) int {
 	hash := hex.EncodeToString(sum[:8])
 	blockedPath := filepath.Join(dir, "stop-blocked")
 	if b, err := os.ReadFile(blockedPath); err == nil && strings.TrimSpace(string(b)) == hash {
-		return 0
+		return ""
 	}
 	_ = coordWriteAtomic(blockedPath, []byte(hash))
 	coordLog(dir, "stop-gate block ids=%s", strings.Join(ids, ","))
-	reason := coordStopReason(open)
-	if b, err := json.Marshal(map[string]string{"decision": "block", "reason": reason}); err == nil {
-		_, _ = fmt.Fprintln(out, string(b))
-	}
-	return 0
+	return coordStopReason(open)
 }
 
 func coordStopReason(open []coordWokenItem) string {

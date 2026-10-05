@@ -91,5 +91,9 @@ func coordStatus(root, run string, asJSON bool, out, errw io.Writer) int {
 		}
 		fmt.Fprintln(out)
 	}
+	if rf := coordLoadReap(dir); rf.Last != nil {
+		fmt.Fprintf(out, "\nlast reap scan %s mode=%s\n", rf.Last.At, rf.Last.Mode)
+		fmt.Fprint(out, coordReapText(rf.Last, time.Now(), true))
+	}
 	return 0
 }

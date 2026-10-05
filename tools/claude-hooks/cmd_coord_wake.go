@@ -28,17 +28,19 @@ import (
 )
 
 type coordConfig struct {
-	Handle     string
-	OrcaBin    string
-	StateRoot  string
-	Slice      time.Duration // --timeout-ms per wait slice
-	MinCycle   time.Duration // floor between empty cycles (no hot loop)
-	Backoff    time.Duration // pause after orca reports a stale waiter_exists
-	WatchEvery time.Duration // ancestor-liveness poll interval
-	CacheTTL   time.Duration // run-current verdict cache
-	Ancestors  []int
-	RepoDir    string // directory whose git toplevel holds .orca/standing-orders.toml; "" = cwd
-	Stderr     io.Writer
+	Handle        string
+	OrcaBin       string
+	StateRoot     string
+	Slice         time.Duration // --timeout-ms per wait slice
+	MinCycle      time.Duration // floor between empty cycles (no hot loop)
+	Backoff       time.Duration // pause after orca reports a stale waiter_exists
+	WatchEvery    time.Duration // ancestor-liveness poll interval
+	CacheTTL      time.Duration // run-current verdict cache
+	Ancestors     []int
+	RepoDir       string // directory whose git toplevel holds .orca/standing-orders.toml; "" = cwd
+	ReapCwd       string // coordinator cwd for coord-reap; "" = os.Getwd
+	ReapAgentRoot string // prefix under which agent-* worktrees are reapable; "" = default
+	Stderr        io.Writer
 }
 
 var coordWakeTypes = "question,escalation,worker_done"

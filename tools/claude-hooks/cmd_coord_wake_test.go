@@ -21,6 +21,9 @@ run-current) cat "$D/run_current.json"; exit 0;;
 task-list) cat "$D/task_list.json"; exit 0;;
 inbox) cat "$D/inbox.json" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}'; exit 0;;
 worker-show) cat "$D/worker_show.json" 2>/dev/null; exit 0;;
+worker-list) cat "$D/worker_list.json" 2>/dev/null || echo '{"ok":true,"result":{"workers":[]}}'; exit 0;;
+worker-stop) [ -f "$D/stopfail" ] && exit 1; echo '{"ok":true,"result":{}}'; exit 0;;
+rm) echo '{"ok":true,"result":{}}'; exit 0;;
 reply) [ -f "$D/replyfail" ] && exit 1; echo '{"ok":true,"result":{}}'; exit 0;;
 check)
   [ -f "$D/fail" ] && exit 1
