@@ -36,6 +36,7 @@ type coordConfig struct {
 	WatchEvery time.Duration // ancestor-liveness poll interval
 	CacheTTL   time.Duration // run-current verdict cache
 	Ancestors  []int
+	RepoDir    string // directory whose git toplevel holds .orca/standing-orders.toml; "" = cwd
 	Stderr     io.Writer
 }
 
@@ -224,14 +225,25 @@ func coordWake(cfg coordConfig) int {
 			}
 		}
 		did := resp.Result.DeliveryID
+		var notes map[string]string
+		if len(actionable) > 0 {
+			orders := coordLoadOrders(coordRepoDir(cfg), dir)
+			actionable, notes = coordApplyOrders(ctx, cfg, dir, ledger, orders, actionable)
+			for _, m := range actionable {
+				if m.Type == "worker_done" {
+					notes[m.ID] += "landing verdict:\n" + coordIndent(coordVerdict(ctx, cfg, runID, m, orders.IntegrationBranch))
+				}
+			}
+		}
 		if len(actionable) > 0 {
 			coordFillTitles(ctx, cfg, runID, ledger, titles)
 			ledger.save(dir)
+			coordRecordWoken(dir, actionable, ledger)
 			if did != "" {
 				_ = coordWriteAtomic(ackPath, []byte(did))
 			}
 			coordLog(dir, "wake delivery=%s actionable=%d telemetry=%d", did, len(actionable), len(msgs)-len(actionable))
-			_, _ = io.WriteString(cfg.Stderr, coordRenderWake(runID, actionable, ledger))
+			_, _ = io.WriteString(cfg.Stderr, coordRenderWake(runID, actionable, ledger, notes))
 			return 2
 		}
 		coordFillTitles(ctx, cfg, runID, ledger, titles)
@@ -285,7 +297,7 @@ func coordFillTitles(ctx context.Context, cfg coordConfig, runID string, l *coor
 	}
 }
 
-func coordRenderWake(runID string, msgs []coordMsg, l *coordLedger) string {
+func coordRenderWake(runID string, msgs []coordMsg, l *coordLedger, notes map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "COORDINATOR INBOX (run %s): %d lane message(s) need a decision. Answer each with the reply command shown, then continue.\n", runID, len(msgs))
 	sort.SliceStable(msgs, func(i, j int) bool { return msgs[i].CreatedAt < msgs[j].CreatedAt })
@@ -303,6 +315,9 @@ func coordRenderWake(runID string, msgs []coordMsg, l *coordLedger) string {
 			fmt.Fprintf(&b, "reply: orca-ide orchestration reply --id %s --body \"...\"\n", m.ID)
 		} else {
 			fmt.Fprintf(&b, "next: review the lane report, then integrate or re-dispatch (task %s)\n", l.Lanes[m.From].taskOrDash())
+		}
+		if n := notes[m.ID]; n != "" {
+			b.WriteString(strings.TrimRight(n, "\n") + "\n")
 		}
 	}
 	return b.String()

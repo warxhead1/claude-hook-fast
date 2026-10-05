@@ -19,6 +19,9 @@ echo "$*" >> "$D/calls.log"
 case "$2" in
 run-current) cat "$D/run_current.json"; exit 0;;
 task-list) cat "$D/task_list.json"; exit 0;;
+inbox) cat "$D/inbox.json" 2>/dev/null || echo '{"ok":true,"result":{"messages":[]}}'; exit 0;;
+worker-show) cat "$D/worker_show.json" 2>/dev/null; exit 0;;
+reply) [ -f "$D/replyfail" ] && exit 1; echo '{"ok":true,"result":{}}'; exit 0;;
 check)
   [ -f "$D/fail" ] && exit 1
   case " $* " in *" --wait "*) [ -f "$D/wait" ] && sleep "$(cat "$D/wait")";; esac
