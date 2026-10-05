@@ -16,7 +16,11 @@ Subcommands: `tmux-preparing`, `tmux-ready`, `tmux-notification`, `tmux-thinking
 `nbus-stop-failure`, `nbus-session-end`, `nbus-subagent-lifecycle`,
 `register-with-hearth-loom`, `deregister`, `steering-poll`,
 `cleanup-tmp`, `hardcoded-constants-guard`, `shader-hardcoded-ids-guard`,
-`shader-compile-validator`, `flow`, `rules`
+`shader-compile-validator`, `flow`, `rules`, `coord-wake`, `coord-status`
+
+`coord-wake` (async+asyncRewake on PostToolUse and Notification idle_prompt) wakes an Orca
+coordinator session on lane question/escalation/worker_done; `coord-status [--json]` prints
+its lane ledger. Design: `docs/coordinator-inbox.md`. Kill switch `COORD_WAKE_DISABLE=1`.
 
 ### `codex-hook` (`cmd/codex-hook/`)
 Hook binary for Codex 0.149. It supports `SessionStart`, `Stop` (a `turn_end`,

@@ -136,6 +136,10 @@ func main() {
 	// cmd_idle_stop_check.go.
 	case "idle-stop-check":
 		cmdIdleStopCheck()
+	case "coord-wake":
+		cmdCoordWake()
+	case "coord-status":
+		cmdCoordStatus()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)
