@@ -30,7 +30,11 @@ standing ruling should be answered without waking anyone.
   or stdout if stderr is empty, is shown to Claude as a system reminder." It wakes Claude
   "even after the session is idle". The events that allow async include PostToolUse and
   Notification. Stop and UserPromptSubmit do not.
-- `timeout` is not enforced for async command hooks.
+- `timeout` IS enforced for async command hooks, and the default is 600 s. Measured
+  2026-10-05 on run_f929afbba020: 189 wake.log lines, no waiter outlived 587 s, five
+  waiters vanished with no exit line, and one killed while the session was idle left 50
+  lane messages undelivered for 40 minutes. Both coord-wake entries in settings.json must
+  carry `"timeout": 86400`. The waiter logs `exit signal=...` when the host kills it.
 - Orca already has a server-side blocking wait:
   `orca-ide orchestration check --run <id> --types <t,...> --wait --timeout-ms <n> --json`.
   It also has `--ack <delivery_id>` and `--peek`.
