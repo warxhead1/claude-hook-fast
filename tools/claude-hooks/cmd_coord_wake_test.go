@@ -305,3 +305,22 @@ func TestCoordFixturesParse(t *testing.T) {
 		t.Fatalf("run-current fixture: %v %+v", err, rc)
 	}
 }
+
+func TestCoordIsSubagentInput(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{``, false},
+		{`not json`, false},
+		{`{"transcript_path":"/home/u/.claude/projects/p/1234.jsonl"}`, false},
+		{`{"transcript_path":"/x/tasks/abc.output"}`, true},
+		{`{"transcript_path":"/x/s/subagents/agent-1.jsonl"}`, true},
+		{`{"transcript_path":"/home/u/.claude/projects/p/1234.jsonl","agent_id":"a1"}`, true},
+	}
+	for _, c := range cases {
+		if got := coordIsSubagentInput([]byte(c.in)); got != c.want {
+			t.Errorf("coordIsSubagentInput(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}

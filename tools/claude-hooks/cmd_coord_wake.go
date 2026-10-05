@@ -23,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/warxhead1/claude-hook-fast/tools/claude-hooks/internal/hookio"
 )
 
 type coordConfig struct {
@@ -66,7 +68,25 @@ func coordConfigFromEnv() coordConfig {
 }
 
 func cmdCoordWake() {
+	data, _ := io.ReadAll(os.Stdin)
+	if coordIsSubagentInput(data) {
+		hookExit(0)
+	}
 	hookExit(coordWake(coordConfigFromEnv()))
+}
+
+// coordIsSubagentInput reports whether the hook fired inside a dispatched
+// subagent. Subagents inherit ORCA_TERMINAL_HANDLE, but a wake delivered to a
+// subagent's context dies with it, after the batch was already acked.
+func coordIsSubagentInput(data []byte) bool {
+	var in struct {
+		TranscriptPath string `json:"transcript_path"`
+		AgentID        string `json:"agent_id"`
+	}
+	if len(data) == 0 || json.Unmarshal(data, &in) != nil {
+		return false
+	}
+	return in.AgentID != "" || hookio.IsSubagentTranscript(in.TranscriptPath)
 }
 
 func coordIsActionable(t string) bool {
