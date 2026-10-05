@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -157,6 +158,20 @@ func coordWake(cfg coordConfig) int {
 		ack = strings.TrimSpace(string(b))
 	}
 	coordLog(dir, "start pid=%d handle=%s ack=%q", os.Getpid(), cfg.Handle, ack)
+	// The host kills hooks that outlive their timeout (600 s default, async
+	// included). Log the signal so a kill is never a silent gap in wake.log.
+	started := time.Now()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
+	defer signal.Stop(sigs)
+	go func() {
+		select {
+		case sig := <-sigs:
+			coordLog(dir, "exit signal=%s after=%s", sig, time.Since(started).Round(time.Second))
+			os.Exit(0)
+		case <-ctx.Done():
+		}
+	}()
 	ledger := coordLoadLedger(dir, runID)
 	titles := map[string]string{}
 

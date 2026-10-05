@@ -346,3 +346,41 @@ func TestCoordWakeRetriesStaleWaiterExists(t *testing.T) {
 		t.Fatalf("wake block missing msg_late: %q", h.errb.String())
 	}
 }
+
+// A host kill (hook timeout) must leave an exit line in wake.log, not a gap.
+func TestCoordWakeLogsHostSignal(t *testing.T) {
+	if os.Getenv("COORD_SIGNAL_CHILD") == "1" {
+		h := newCoordHarness(t, "term_coord")
+		h.dir = os.Getenv("COORD_SIGNAL_DIR")
+		h.cfg.OrcaBin = filepath.Join(h.dir, "orca-stub")
+		h.cfg.StateRoot = filepath.Join(h.dir, "state")
+		t.Setenv("STUB_DIR", h.dir)
+		coordWake(h.cfg)
+		return
+	}
+	h := newCoordHarness(t, "term_coord")
+	_ = os.WriteFile(filepath.Join(h.dir, "wait"), []byte("20"), 0o644)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCoordWakeLogsHostSignal$")
+	cmd.Env = append(os.Environ(), "COORD_SIGNAL_CHILD=1", "COORD_SIGNAL_DIR="+h.dir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	logp := filepath.Join(h.runDir(), "wake.log")
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		if b, _ := os.ReadFile(logp); strings.Contains(string(b), " start pid=") {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			t.Fatal("child waiter never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Wait()
+	b, _ := os.ReadFile(logp)
+	if !strings.Contains(string(b), "exit signal=terminated") {
+		t.Fatalf("no signal exit line in wake.log:\n%s", b)
+	}
+}
