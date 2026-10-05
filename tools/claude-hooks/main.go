@@ -142,6 +142,8 @@ func main() {
 		cmdCoordStopGate()
 	case "coord-status":
 		cmdCoordStatus()
+	case "coord-reap":
+		cmdCoordReap()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand")
 		os.Exit(2)

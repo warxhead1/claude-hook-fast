@@ -110,6 +110,60 @@ Before waking for a `worker_done`, `coord-wake` resolves the dispatch
 The integration branch is set in the run's `standing-orders.toml` as
 `integration_branch = "..."`. If unset, the verdict omits the merge check and says so.
 
+### E. coord-reap: landed lanes retire themselves; unlanded ones demand a disposition
+
+Measured 2026-10-05 (Orca run `run_f929afbba020`): 10 worktrees sat idle. Their workers had
+succeeded or failed, their trees were clean, and their branches were already merged into the
+integration branch and pushed. Some still held live retained codex terminals: 7 Orca
+worktrees (strand-*, mal-armor-panels, mal-ironclad-panels, Hearth gamedev-showcase-v2) and 3
+Claude `agent-*` worktrees. Components A-D never retire a lane, so finished lanes festered
+until the owner asked why.
+
+Reap runs inside `coord-stop-gate` (a hard 20 s budget, fail open). It lists the run's workers
+with `orchestration worker-list --run <id> --json` and groups them by worktree path
+(`resource.worktreeId` is `<repoId>::<abs path>`). A path with any non-terminal worker is
+skipped. For terminal workers (`succeeded`, `failed`, `cancelled`) it classifies the path:
+
+- **REAPABLE** when ALL hold: the path exists and is a linked worktree (a primary checkout is
+  never touched); `git status --porcelain --untracked-files=all` is empty; after a
+  `git fetch origin` the branch HEAD is an ancestor of `origin/<integration_branch>`; no
+  process has its cwd inside the path (`/proc/*/cwd`); and the path neither is nor contains
+  the coordinator's own cwd. With `integration_branch` unset nothing is reapable.
+- **FESTERING** when the worker is terminal, a condition fails, and the path has been seen
+  failing for longer than `reap_grace_minutes`. The failing condition is recorded: `dirty with
+  N files`, `N commits not in origin/<branch>` (plus `branch X unpushed`), or `cwd in use by
+  <comm>(<pid>)`. Orca keeps no terminal-since timestamp, so first-seen times live in
+  `<state>/<run_id>/reap.json`.
+- Claude `agent-*` worktrees (basename prefix `agent-`, under `/home/eric/data2/worktrees/`) of
+  every repo a worker touched, from `git worktree list --porcelain`, get the same test minus
+  the worker state. An in-process subagent's cwd is its parent session's, so `/proc` cannot see
+  it; an agent worktree whose dir, top-level entries, HEAD or reflog changed inside the grace
+  window is treated as live and left alone entirely.
+
+Standing-orders keys (same `standing-orders.toml` as C and D):
+
+- `reap = "auto" | "suggest" | "off"`, default `auto`.
+- `reap_grace_minutes`, default 30.
+- `integration_branch`, shared with D.
+
+`auto` runs, for each REAPABLE worktree and stopping at the first failure for that worktree:
+`orca-ide orchestration worker-stop --dispatch <id> --json` for each worker whose
+`terminalState` is not `released`, then `orca-ide worktree rm --worktree path:<p> --json`
+(Orca worktrees) or `git -C <repo> worktree remove <p>` (agent worktrees). It never passes
+`--force`, never deletes a branch, never uses `rm`. Each action goes to `wake.log`. `suggest`
+prints the same commands and runs nothing; the stop gate then includes reapable lanes in its
+block.
+
+The stop gate blocks ONCE per distinct set of FESTERING lanes (`<state>/<run_id>/reap-blocked`).
+The reason lists each lane, its path, how long it has been idle, the failing condition, and the
+two ways out: merge it (the next Stop retires it), or abandon it with the printed
+`worker-stop` plus `worktree rm` commands. `coord-wake` schedules nothing; reap runs at the
+next Stop. `coord-status` prints the last scan (reaped, reapable, festering, pending).
+
+`claude-hook-fast coord-reap [--run <id>] [--mode suggest|auto|off] [--json] [--persist]` runs
+one scan by hand. It defaults to `suggest` and writes nothing unless `--persist` is given.
+Kill switch: `COORD_REAP_DISABLE=1`.
+
 ## Build order
 
 1. A, with the ledger and `coord-status` (closes the "never read" and telemetry-in-context

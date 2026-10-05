@@ -30,6 +30,8 @@ type coordOrder struct {
 
 type coordOrders struct {
 	IntegrationBranch string        `toml:"integration_branch"`
+	Reap              string        `toml:"reap"`               // auto | suggest | off (default auto)
+	ReapGraceMinutes  int           `toml:"reap_grace_minutes"` // default 30
 	Orders            []*coordOrder `toml:"order"`
 }
 
