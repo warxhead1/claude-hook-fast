@@ -65,6 +65,24 @@ type coordReapItem struct {
 	Result   string     `json:"result,omitempty"`
 	repo     string
 	stop     []string
+	// recheck: the only blocker was a cwd held inside the tree while the
+	// lane's own terminal is still retained; worker-stop runs first and the
+	// cwd test is repeated before the remove.
+	recheck bool
+}
+
+// coordReapCwdWait bounds how long apply waits for cwd holders to exit after
+// worker-stop before giving up on the remove.
+var coordReapCwdWait = 10 * time.Second
+
+func coordCwdHolders(p string) []string {
+	var h []string
+	for _, pc := range coordScanProcs() {
+		if coordPathWithin(pc.cwd, p) {
+			h = append(h, fmt.Sprintf("%s(%d)", pc.comm, pc.pid))
+		}
+	}
+	return h
 }
 
 func (it coordReapItem) age(now time.Time) time.Duration {
@@ -398,6 +416,21 @@ func coordReapScan(ctx context.Context, cfg coordConfig, runID, dir string, orde
 		if skip {
 			continue
 		}
+		// A finished lane whose retained terminal still sits in its tree
+		// (the original incident) is the case reap exists for: when cwd use
+		// is the only blocker and there is a terminal to stop, stop it and
+		// re-test cwd in apply instead of calling the lane festering.
+		if len(it.stop) > 0 && len(fails) > 0 {
+			onlyCwd := true
+			for _, f := range fails {
+				if !strings.HasPrefix(f, "cwd in use") {
+					onlyCwd = false
+				}
+			}
+			if onlyCwd {
+				it.recheck, fails = true, nil
+			}
+		}
 		it.repo = repo
 		repos[repo] = true
 		classify(it, fails, p)
@@ -493,7 +526,19 @@ func coordReapApply(ctx context.Context, dir string, res *coordReapResult) {
 			continue
 		}
 		failed := ""
-		for _, c := range it.Cmds {
+		for i, c := range it.Cmds {
+			if it.recheck && i == len(it.Cmds)-1 {
+				deadline := time.Now().Add(coordReapCwdWait)
+				h := coordCwdHolders(it.Path)
+				for len(h) > 0 && time.Now().Before(deadline) && ctx.Err() == nil {
+					time.Sleep(250 * time.Millisecond)
+					h = coordCwdHolders(it.Path)
+				}
+				if len(h) > 0 {
+					failed = "cwd still in use after worker-stop by " + strings.Join(h, " ")
+					break
+				}
+			}
 			if err := coordReapRunCmd(ctx, c); err != nil {
 				failed = fmt.Sprintf("%s: %v", strings.Join(c, " "), err)
 				break

@@ -129,6 +129,10 @@ skipped. For terminal workers (`succeeded`, `failed`, `cancelled`) it classifies
   `git fetch origin` the branch HEAD is an ancestor of `origin/<integration_branch>`; no
   process has its cwd inside the path (`/proc/*/cwd`); and the path neither is nor contains
   the coordinator's own cwd. With `integration_branch` unset nothing is reapable.
+  Exception, which is the original incident: when a held cwd is the ONLY blocker and the
+  lane still has a retained terminal, the lane counts as reapable. Apply runs `worker-stop`,
+  waits up to 10 s for every cwd holder to exit, and runs the remove only once none remain.
+  If a holder survives, the tree stays and the failure is logged.
 - **FESTERING** when the worker is terminal, a condition fails, and the path has been seen
   failing for longer than `reap_grace_minutes`. The failing condition is recorded: `dirty with
   N files`, `N commits not in origin/<branch>` (plus `branch X unpushed`), or `cwd in use by

@@ -516,3 +516,67 @@ func TestCoordStatusShowsReapSection(t *testing.T) {
 		t.Fatalf("status:\n%s", out.String())
 	}
 }
+
+// The original incident: a finished, landed lane whose retained terminal
+// still has its cwd in the tree. worker-stop runs, the holder exits, the
+// tree is removed.
+func TestReapRetainedTerminalStoppedThenRemoved(t *testing.T) {
+	e := newReapEnv(t, reapOrders)
+	p := e.lane("lane1")
+	cmd := exec.Command("sleep", "1")
+	cmd.Dir = p
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = cmd.Wait() }()
+	e.setWorkers(reapWorkerSpec{"ctx_1", p, "succeeded", "retained"})
+	res := e.reap("")
+	m := e.mutations()
+	if len(res.Reaped) != 1 || len(m) != 2 || !strings.HasPrefix(m[0], "orchestration worker-stop") || !strings.HasPrefix(m[1], "worktree rm") {
+		t.Fatalf("want stop then rm, got %v\n%s", m, coordReapText(res, time.Now(), true))
+	}
+}
+
+// If the holder survives worker-stop, the remove never runs.
+func TestReapRetainedTerminalHolderSurvivesStop(t *testing.T) {
+	old := coordReapCwdWait
+	coordReapCwdWait = 500 * time.Millisecond
+	defer func() { coordReapCwdWait = old }()
+	e := newReapEnv(t, reapOrders)
+	p := e.lane("lane1")
+	cmd := exec.Command("sleep", "60")
+	cmd.Dir = p
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	e.setWorkers(reapWorkerSpec{"ctx_1", p, "succeeded", "retained"})
+	res := e.reap("")
+	m := e.mutations()
+	if len(res.Reaped) != 0 || len(m) != 1 || !strings.HasPrefix(m[0], "orchestration worker-stop") {
+		t.Fatalf("want stop only, got %v", m)
+	}
+	if len(res.Reapable) != 1 || !strings.Contains(res.Reapable[0].Result, "cwd still in use") || !exists(p) {
+		t.Fatalf("tree must survive: %s", coordReapText(res, time.Now(), true))
+	}
+}
+
+// A dirty tree with a retained terminal is not stopped: cwd is not the only blocker.
+func TestReapRetainedTerminalDirtyNotStopped(t *testing.T) {
+	e := newReapEnv(t, reapOrders)
+	p := e.lane("lane1")
+	if err := os.WriteFile(filepath.Join(p, "wip.txt"), []byte("w"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sleep", "60")
+	cmd.Dir = p
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	e.setWorkers(reapWorkerSpec{"ctx_1", p, "succeeded", "retained"})
+	e.reap("")
+	if m := e.mutations(); len(m) != 0 {
+		t.Fatalf("dirty lane touched: %v", m)
+	}
+}
