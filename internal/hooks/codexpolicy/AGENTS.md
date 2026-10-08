@@ -4,10 +4,11 @@ This contract applies to every Codex session and repository unless the user
 explicitly overrides it. Code quality, coherent implementation, and retained
 context take priority over minimizing the model cost of each edit.
 
-The only model ids this account accepts are `gpt-5.5`, `gpt-5.6-sol`, and
-`gpt-6-astra`. Any other model id returns an HTTP 400 rejection on this
-account and must never be named in a launch command. Effort ceiling for any
-worker is `xhigh`; `--effort max` is rejected.
+The worker launch allowlist is `gpt-5.5`, `gpt-6.1-sol`, and
+`gpt-6-astra`. Other model ids are rejected by the host policy and must not
+be named in a worker launch without a deliberate policy update. Provider
+availability is a separate check. Effort ceiling for any worker is `xhigh`;
+`--effort max` is rejected.
 
 ## Direct implementation
 
@@ -29,7 +30,7 @@ worker is `xhigh`; `--effort max` is rejected.
 
 ## Model routing when delegation is justified
 
-- Prefer `gpt-5.6-sol` for both a justified independent implementation task
+- Prefer `gpt-6.1-sol` for both a justified independent implementation task
   and an independent read-only inventory, evidence collection, documentation
   audit, or bounded review. It is the general worker tier for anything that
   is not exceptional judgment or synthesis.
@@ -47,7 +48,7 @@ worker is `xhigh`; `--effort max` is rejected.
 
 - Every `orca-ide orchestration worker-start` command must include an explicit
   `--agent`. Every Codex worker must also include exactly one explicit `--model`.
-- Delegated read-only Codex workers normally use `--model gpt-5.6-sol`.
+- Delegated read-only Codex workers normally use `--model gpt-6.1-sol`.
 - The host hook permits Sol and gpt-5.5 normally. An additional Astra worker
   requires `--model gpt-6-astra` and `CODEX_ALLOW_ASTRA_WORKER=1`. This explicit
   launch prefix acknowledges exceptional worker use. Unknown, missing, or

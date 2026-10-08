@@ -10,7 +10,7 @@ import (
 
 func TestDefaultPolicyIsValid(t *testing.T) {
 	p := Default()
-	if p.DefaultModel != "gpt-6-astra" || p.ReadOnlyModel != "gpt-5.6-sol" {
+	if p.DefaultModel != "gpt-6-astra" || p.ReadOnlyModel != "gpt-6.1-sol" {
 		t.Fatalf("unexpected primary and read-only defaults: %+v", p)
 	}
 }
@@ -43,7 +43,8 @@ func TestInspectCommand(t *testing.T) {
 		blocked bool
 		want    string
 	}{
-		{"sol allowed", "orca-ide orchestration worker-start --task t --agent codex --model gpt-5.6-sol --json", false, ""},
+		{"sol allowed", "orca-ide orchestration worker-start --task t --agent codex --model gpt-6.1-sol --json", false, ""},
+		{"previous sol rejected", "orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol", true, "not in the host allowlist"},
 		{"gpt-5.5 allowed", "orca-ide orchestration worker-start --agent=codex --model=gpt-5.5", false, ""},
 		{"astra requires opt in", "orca-ide orchestration worker-start --agent codex --model gpt-6-astra", true, "CODEX_ALLOW_ASTRA_WORKER=1"},
 		{"astra explicitly allowed", "CODEX_ALLOW_ASTRA_WORKER=1 orca-ide orchestration worker-start --agent codex --model gpt-6-astra", false, ""},
@@ -55,19 +56,19 @@ func TestInspectCommand(t *testing.T) {
 		{"missing model", "orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
 		{"unknown model", "/home/eric/.local/bin/orca-ide orchestration worker-start --agent codex --model mystery", true, "not in the host allowlist"},
 		{"missing agent", "orca-ide orchestration worker-start --task t", true, "explicit --agent"},
-		{"duplicate model", "orca-ide orchestration worker-start --agent codex --model gpt-5.6-sol --model gpt-5.5", true, "duplicate --model"},
+		{"duplicate model", "orca-ide orchestration worker-start --agent codex --model gpt-6.1-sol --model gpt-5.5", true, "duplicate --model"},
 		{"other agent unaffected", "orca-ide orchestration worker-start --agent claude", false, ""},
 		{"unrelated text unaffected", "echo orca-ide orchestration worker-start --agent codex", false, ""},
 		{"chained unsafe launch", "true && orca orchestration worker-start --agent codex", true, "explicit --model"},
-		{"environment prefix", "env TRACE=1 orca-ide orchestration worker-start --agent codex --model 'gpt-5.6-sol'", false, ""},
-		{"single quoted semicolon in flag", "orca-ide orchestration worker-start --comment 'bounded; no writes' --agent codex --model gpt-5.6-sol", false, ""},
-		{"double quoted semicolon in flag", "orca-ide orchestration worker-start --comment \"bounded; no writes\" --agent codex --model gpt-5.6-sol", false, ""},
-		{"double quoted and in flag", "orca-ide orchestration worker-start --comment \"bounded && no writes\" --agent codex --model gpt-5.6-sol", false, ""},
-		{"single quoted and in flag", "orca-ide orchestration worker-start --comment 'bounded && no writes' --agent codex --model gpt-5.6-sol", false, ""},
-		{"single quoted or in flag", "orca-ide orchestration worker-start --comment 'bounded || no writes' --agent codex --model gpt-5.6-sol", false, ""},
-		{"double quoted or in flag", "orca-ide orchestration worker-start --comment \"bounded || no writes\" --agent codex --model gpt-5.6-sol", false, ""},
-		{"double quoted pipe in flag", "orca-ide orchestration worker-start --comment \"bounded | no writes\" --agent codex --model gpt-5.6-sol", false, ""},
-		{"single quoted pipe in flag", "orca-ide orchestration worker-start --comment 'bounded | no writes' --agent codex --model gpt-5.6-sol", false, ""},
+		{"environment prefix", "env TRACE=1 orca-ide orchestration worker-start --agent codex --model 'gpt-6.1-sol'", false, ""},
+		{"single quoted semicolon in flag", "orca-ide orchestration worker-start --comment 'bounded; no writes' --agent codex --model gpt-6.1-sol", false, ""},
+		{"double quoted semicolon in flag", "orca-ide orchestration worker-start --comment \"bounded; no writes\" --agent codex --model gpt-6.1-sol", false, ""},
+		{"double quoted and in flag", "orca-ide orchestration worker-start --comment \"bounded && no writes\" --agent codex --model gpt-6.1-sol", false, ""},
+		{"single quoted and in flag", "orca-ide orchestration worker-start --comment 'bounded && no writes' --agent codex --model gpt-6.1-sol", false, ""},
+		{"single quoted or in flag", "orca-ide orchestration worker-start --comment 'bounded || no writes' --agent codex --model gpt-6.1-sol", false, ""},
+		{"double quoted or in flag", "orca-ide orchestration worker-start --comment \"bounded || no writes\" --agent codex --model gpt-6.1-sol", false, ""},
+		{"double quoted pipe in flag", "orca-ide orchestration worker-start --comment \"bounded | no writes\" --agent codex --model gpt-6.1-sol", false, ""},
+		{"single quoted pipe in flag", "orca-ide orchestration worker-start --comment 'bounded | no writes' --agent codex --model gpt-6.1-sol", false, ""},
 		{"semicolon chained unsafe launch", "true; orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
 		{"and chained unsafe launch", "true && orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
 		{"or chained unsafe launch", "false || orca-ide orchestration worker-start --agent codex", true, "explicit --model"},
