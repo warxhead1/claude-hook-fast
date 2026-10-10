@@ -69,6 +69,8 @@ type coordReapItem struct {
 	// lane's own terminal is still retained; worker-stop runs first and the
 	// cwd test is repeated before the remove.
 	recheck bool
+	// active is the recency window re-tested at apply time.
+	active time.Duration
 }
 
 // coordReapCwdWait bounds how long apply waits for cwd holders to exit after
@@ -78,7 +80,7 @@ var coordReapCwdWait = 10 * time.Second
 func coordCwdHolders(p string) []string {
 	var h []string
 	for _, pc := range coordScanProcs() {
-		if coordPathWithin(pc.cwd, p) {
+		if coordCwdInside(pc.cwd, p) {
 			h = append(h, fmt.Sprintf("%s(%d)", pc.comm, pc.pid))
 		}
 	}
@@ -109,6 +111,7 @@ type coordReapResult struct {
 	Gone      int             `json:"terminal_worktree_gone,omitempty"`
 	Reaped    []coordReapItem `json:"reaped,omitempty"`
 	Reapable  []coordReapItem `json:"reapable,omitempty"`
+	Kept      []coordReapItem `json:"kept,omitempty"` // vetoed (keep marker or recent change); never removed
 	Festering []coordReapItem `json:"festering,omitempty"`
 	Pending   []coordReapItem `json:"pending,omitempty"` // terminal and failing, inside the grace window
 }
@@ -174,6 +177,17 @@ func coordScanProcs() []coordProc {
 	return out
 }
 
+// coordCwdInside reports whether a /proc cwd lies in p, matching both the
+// raw path and its symlink-resolved form.
+func coordCwdInside(cwd, p string) bool {
+	cwd = strings.TrimSuffix(cwd, " (deleted)")
+	if coordPathWithin(cwd, p) {
+		return true
+	}
+	real, err := filepath.EvalSymlinks(p)
+	return err == nil && coordPathWithin(cwd, real)
+}
+
 func coordPathWithin(child, parent string) bool {
 	child, parent = filepath.Clean(child), filepath.Clean(parent)
 	return child == parent || strings.HasPrefix(child, parent+"/")
@@ -234,7 +248,7 @@ func (pr *coordReapProbe) failing(ctx context.Context, p string) (fails []string
 	}
 	var holders []string
 	for _, pc := range pr.procs {
-		if coordPathWithin(pc.cwd, p) {
+		if coordCwdInside(pc.cwd, p) {
 			holders = append(holders, fmt.Sprintf("%s(%d)", pc.comm, pc.pid))
 		}
 	}
@@ -252,32 +266,6 @@ func (pr *coordReapProbe) failing(ctx context.Context, p string) (fails []string
 }
 
 func mustOut(s string, _ error) string { return s }
-
-// lastActivity is the newest mtime among the worktree dir, its top-level
-// entries, and the worktree's HEAD and reflog (not the index: our own git status rewrites it).
-func (pr *coordReapProbe) lastActivity(ctx context.Context, p string) time.Time {
-	var newest time.Time
-	touch := func(path string) {
-		if st, err := os.Stat(path); err == nil && st.ModTime().After(newest) {
-			newest = st.ModTime()
-		}
-	}
-	touch(p)
-	if ents, err := os.ReadDir(p); err == nil {
-		for _, e := range ents {
-			if e.Name() != ".git" {
-				touch(filepath.Join(p, e.Name()))
-			}
-		}
-	}
-	if gd, err := coordReapGit(ctx, p, "rev-parse", "--absolute-git-dir"); err == nil {
-		gd = strings.TrimSpace(gd)
-		for _, f := range []string{"HEAD", "logs/HEAD"} {
-			touch(filepath.Join(gd, f))
-		}
-	}
-	return newest
-}
 
 // ---------- scan ----------
 
@@ -416,6 +404,12 @@ func coordReapScan(ctx context.Context, cfg coordConfig, runID, dir string, orde
 		if skip {
 			continue
 		}
+		if why := coordReapVeto(ctx, p, grace, now); why != "" {
+			it.Failing = []string{why}
+			res.Kept = append(res.Kept, it)
+			continue
+		}
+		it.active = grace
 		// A finished lane whose retained terminal still sits in its tree
 		// (the original incident) is the case reap exists for: when cwd use
 		// is the only blocker and there is a terminal to stop, stop it and
@@ -470,12 +464,21 @@ func coordReapScan(ctx context.Context, cfg coordConfig, runID, dir string, orde
 					inUse = true
 				}
 			}
-			// An in-process subagent's cwd is its parent session's, so /proc
-			// cannot see it. A worktree touched inside the grace window is
-			// treated as a live agent and left alone entirely.
-			if inUse || now.Sub(pr.lastActivity(ctx, p)) < grace {
+			if inUse {
 				continue
 			}
+			// An in-process subagent's cwd is its parent session's, so /proc
+			// cannot see it. A worktree touched inside the grace window is
+			// treated as a live agent and left alone silently; a keep
+			// marker is reported.
+			if why := coordReapVeto(ctx, p, grace, now); why != "" {
+				if strings.HasPrefix(why, "keep marker") {
+					it.Failing = []string{why}
+					res.Kept = append(res.Kept, it)
+				}
+				continue
+			}
+			it.active = grace
 			classify(it, fails, p)
 		}
 	}
@@ -526,7 +529,21 @@ func coordReapApply(ctx context.Context, dir string, res *coordReapResult) {
 			continue
 		}
 		failed := ""
+		// Vetoes are re-tested at apply time; the tree may have changed
+		// since the scan.
+		if why := coordReapVeto(ctx, it.Path, it.active, time.Now()); why != "" {
+			it.Result = "KEPT " + why
+			coordLog(dir, "reap KEPT path=%s %s", it.Path, why)
+			res.Kept = append(res.Kept, it)
+			continue
+		}
 		for i, c := range it.Cmds {
+			if !it.recheck && i == len(it.Cmds)-1 {
+				if h := coordCwdHolders(it.Path); len(h) > 0 {
+					failed = "cwd in use by " + strings.Join(h, " ")
+					break
+				}
+			}
 			if it.recheck && i == len(it.Cmds)-1 {
 				deadline := time.Now().Add(coordReapCwdWait)
 				h := coordCwdHolders(it.Path)
@@ -623,6 +640,7 @@ func coordReapText(res *coordReapResult, now time.Time, cmds bool) string {
 	}
 	coordReapSection(&b, "REAPED", res.Reaped, now, false)
 	coordReapSection(&b, "REAPABLE", res.Reapable, now, cmds)
+	coordReapSection(&b, "KEPT (vetoed, never removed)", res.Kept, now, false)
 	coordReapSection(&b, "FESTERING", res.Festering, now, cmds)
 	coordReapSection(&b, "PENDING (terminal, not landed, inside grace)", res.Pending, now, false)
 	return b.String()
