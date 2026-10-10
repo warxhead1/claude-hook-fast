@@ -71,6 +71,7 @@ func (e *reapEnv) lane(name string) string {
 
 func (e *reapEnv) laneAt(p, branch string) string {
 	reapGit(e.t, e.repo, "worktree", "add", "-b", branch, p, "integ")
+	e.settle(p)
 	return p
 }
 
@@ -80,6 +81,7 @@ func (e *reapEnv) commitIn(p string) {
 	}
 	reapGit(e.t, p, "add", ".")
 	reapGit(e.t, p, "commit", "-m", "lane work")
+	e.settle(p)
 }
 
 type reapWorkerSpec struct{ dispatch, path, state, term string }
@@ -174,6 +176,7 @@ func TestReapDirtyIsFestering(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(p, "untracked.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	e.settle(p)
 	e.setWorkers(reapWorkerSpec{"ctx_1", p, "succeeded", "released"})
 	res := e.reap("")
 	if len(res.Reaped) != 0 || len(res.Pending) != 1 || !strings.Contains(res.Pending[0].Failing[0], "dirty with 1 files") {
@@ -250,6 +253,7 @@ func TestReapCoordinatorCwdNeverReaped(t *testing.T) {
 			if err := os.MkdirAll(cwd, 0o755); err != nil {
 				t.Fatal(err)
 			}
+			e.settle(p)
 		}
 		e.cfg.ReapCwd = cwd
 		e.setWorkers(reapWorkerSpec{"ctx_1", p, "succeeded", "released"})
@@ -419,6 +423,9 @@ func TestReapFreshAgentWorktreeIsLeftAlone(t *testing.T) {
 	e := newReapEnv(t, reapOrders)
 	p := e.lane("lane1")
 	agent := e.laneAt(filepath.Join(e.cfg.ReapAgentRoot, "agent-live1"), "xwt/agent-live1")
+	if err := os.Chtimes(agent, time.Now(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	e.setWorkers(reapWorkerSpec{"ctx_1", p, "succeeded", "released"})
 	res := e.reap("")
 	if !exists(agent) || len(res.Reaped) != 1 || res.Reaped[0].Kind != "orca" {
