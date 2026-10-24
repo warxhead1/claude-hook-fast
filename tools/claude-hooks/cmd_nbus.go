@@ -947,6 +947,19 @@ const (
 	chanSubagentLifecycle        = "bus.hearth.subagent.lifecycle.v1"
 )
 
+// stampOrcaIdentity adds the Orca managed_by/terminal/worktree/tab fields to
+// env when the hook runs inside an Orca-managed PTY.
+func stampOrcaIdentity(env map[string]any) {
+	if h := event.OrcaTerminalHandle(); h != "" {
+		env["managed_by"] = "orca"
+		env["orca_terminal"] = h
+		env["orca_worktree_id"] = os.Getenv("ORCA_WORKTREE_ID")
+		env["orca_tab_id"] = os.Getenv("ORCA_TAB_ID")
+	} else if os.Getenv("ORCA_HISTFILE") != "" {
+		env["managed_by"] = "orca"
+	}
+}
+
 // cmdNbusPermissionRequest handles the PermissionRequest hook — fires when
 // Claude Code is about to show a permission prompt to the user. Publishes to
 // bus.hearth.session.permission.requested.v1 so the phone/watch shows an
@@ -989,12 +1002,14 @@ func cmdNbusPermissionRequest() {
 			options []string
 		}
 		var allQuestions []parsedQ
+		var verbatimQuestions []any
 
 		if len(in.ToolInput) > 0 {
 			var m map[string]any
 			if err := json.Unmarshal(in.ToolInput, &m); err == nil {
 				// Primary shape: {"questions": [{"question": "...", "options": [...]}]}
 				if qs, ok := m["questions"].([]any); ok && len(qs) > 0 {
+					verbatimQuestions = qs
 					for _, qi := range qs {
 						q, ok := qi.(map[string]any)
 						if !ok {
@@ -1045,16 +1060,25 @@ func cmdNbusPermissionRequest() {
 			})
 		}
 
+		// Full-fidelity: the tool input's questions verbatim (header,
+		// multiSelect, option descriptions) for the closed-loop answer driver.
+		var questionsOut any = questionsAll
+		if verbatimQuestions != nil {
+			questionsOut = verbatimQuestions
+		}
 		env := map[string]any{
 			"correlation_id": qCorr,
 			"session_id":     in.SessionID,
+			"tool_use_id":    in.ToolUseID,
 			"question":       allQuestions[0].text,
 			"options":        allQuestions[0].options,
-			"questions_all":  questionsAll,
+			"questions_all":  questionsOut,
 			"project":        can,
 			"project_short":  projShort,
 			"ts":             now.Format(time.RFC3339Nano),
+			"pane_id":        paneID,
 		}
+		stampOrcaIdentity(env)
 		publishNbusEnvelope(chanSessionQuestion, env, can)
 		hooklog.Writef("nbus-permission-request: published QUESTION corr=%s session=%s pane=%s phases=%d",
 			qCorr, in.SessionID, paneID, len(allQuestions))
@@ -1097,14 +1121,7 @@ func cmdNbusPermissionRequest() {
 		"parent_tool_use_id": in.ParentToolUseID,
 		"cwd":                in.EffectiveCWD(),
 	}
-	if h := event.OrcaTerminalHandle(); h != "" {
-		env["managed_by"] = "orca"
-		env["orca_terminal"] = h
-		env["orca_worktree_id"] = os.Getenv("ORCA_WORKTREE_ID")
-		env["orca_tab_id"] = os.Getenv("ORCA_TAB_ID")
-	} else if os.Getenv("ORCA_HISTFILE") != "" {
-		env["managed_by"] = "orca"
-	}
+	stampOrcaIdentity(env)
 	for k, v := range permissionRichFields(in.ToolName, in.ToolInput) {
 		env[k] = v
 	}
