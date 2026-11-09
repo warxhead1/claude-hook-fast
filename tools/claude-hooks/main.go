@@ -83,6 +83,8 @@ func main() {
 		cmdCleanupTmp()
 	case "dispatch-model-guard":
 		cmdDispatchModelGuard()
+	case "brief-lint":
+		cmdBriefLint()
 	case "hardcoded-constants-guard":
 		cmdHardcodedConstantsGuard()
 	case "shader-hardcoded-ids-guard":
