@@ -1528,6 +1528,9 @@ func boundToolSummary(toolName string, raw json.RawMessage) string {
 				out["verify_class"] = class
 				out["verify_cmd"] = phrase
 			}
+			if ops := bashGitOps(c); ops != "" {
+				out["git_ops"] = ops
+			}
 		}
 	case "Skill":
 		if s, ok := str("skill"); ok && skillNameChars.MatchString(s) {

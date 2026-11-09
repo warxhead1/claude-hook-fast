@@ -284,6 +284,48 @@ func afterToken(toks []shTok, s string) []shTok {
 	return nil
 }
 
+// --- git operations ---------------------------------------------------------
+
+// gitSubcommands are the git operations reported on the bus: plain words from
+// a fixed table, so no path, ref or commit message is emitted. Commit and
+// revert detection in the reflex detectors key on these.
+var gitSubcommands = map[string]bool{
+	"add": true, "commit": true, "push": true, "pull": true, "fetch": true,
+	"checkout": true, "switch": true, "restore": true, "reset": true, "revert": true,
+	"stash": true, "merge": true, "rebase": true, "cherry-pick": true, "worktree": true,
+	"status": true, "diff": true, "log": true, "show": true, "branch": true, "tag": true,
+	"clean": true, "rm": true, "mv": true, "apply": true, "am": true,
+}
+
+var gitValued = map[string]bool{"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--namespace": true}
+
+// bashGitOps returns "git <sub>" for each git segment of a command, deduped
+// in order: "git add git commit git push".
+func bashGitOps(cmd string) string {
+	var ops []string
+	seen := map[string]bool{}
+	for _, seg := range splitShell(cmd) {
+		verb, args := verifyCommand(seg)
+		if verb != "git" {
+			continue
+		}
+		sub := firstPositional(args, gitValued)
+		if !gitSubcommands[sub] {
+			continue
+		}
+		op := "git " + sub
+		if seen[op] {
+			continue
+		}
+		seen[op] = true
+		ops = append(ops, op)
+		if len(ops) == maxActivityVerbs {
+			break
+		}
+	}
+	return strings.Join(ops, " ")
+}
+
 // --- outcome ----------------------------------------------------------------
 
 // verifyFailMarkers are runner lines that mean a verify failed even when the
