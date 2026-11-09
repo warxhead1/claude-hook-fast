@@ -18,6 +18,24 @@ var (
 	hookCmd   string
 )
 
+// unknownSubcommandExit is the exit code for a subcommand this binary does
+// not know. Run as a hook (stdin is the harness pipe), exit 2 would mean
+// BLOCK: a settings.json entry that runs ahead of the installed binary (new
+// hook wired before `make install`, a rollback, a failed install) would
+// block every matching tool call in every live session. Fail open there;
+// keep exit 2 for a person typing the command (claude-hook-fast#50).
+func unknownSubcommandExit(interactive bool) int {
+	if interactive {
+		return 2
+	}
+	return 0
+}
+
+func stdinIsTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
 func hookExit(code int) {
 	timing.Record("claude-hook-fast", hookCmd, time.Since(hookStart))
 	traceFinish(code)
@@ -147,8 +165,10 @@ func main() {
 	case "coord-reap":
 		cmdCoordReap()
 	default:
-		fmt.Fprintln(os.Stderr, "unknown subcommand")
-		os.Exit(2)
+		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", subcommand)
+		// hookExit, not os.Exit: traceInit tees stderr through a pipe that
+		// only traceFinish flushes, so a bare os.Exit drops this message.
+		hookExit(unknownSubcommandExit(stdinIsTerminal()))
 	}
 	timing.Record("claude-hook-fast", subcommand, time.Since(hookStart))
 	traceFinish(0)
