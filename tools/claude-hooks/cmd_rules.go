@@ -112,6 +112,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/project"
 )
 
 // ── config types ──────────────────────────────────────────────────────────────
@@ -532,10 +534,43 @@ func isGitRepo(dir string) bool {
 // <project>/<branch> bare-repo layout (e.g. hearth-loom/main) as isolated —
 // that reflects the operator's own branch organization, not per-dispatch
 // agent isolation.
+//
+// A LINKED worktree (.git is a gitdir file) under the data2 worktree root or
+// an Orca workspace root is isolated too: that is where the 2026-08-24
+// relocation puts every session and agent worktree. A primary clone parked
+// under those roots is not.
 func alreadyIsolatedCWD(cwd string) bool {
 	sep := string(filepath.Separator)
-	return strings.Contains(cwd, sep+".claude"+sep+"worktrees"+sep) ||
-		strings.Contains(cwd, sep+".worktrees"+sep)
+	if strings.Contains(cwd, sep+".claude"+sep+"worktrees"+sep) ||
+		strings.Contains(cwd, sep+".worktrees"+sep) {
+		return true
+	}
+	root, kind := repoOf(cwd)
+	if kind != "worktree" {
+		return false
+	}
+	for _, r := range isolatedWorktreeRoots() {
+		if strings.HasPrefix(root, r+sep) {
+			return true
+		}
+	}
+	return false
+}
+
+// orcaWorkspacesRoot holds Orca's per-task worktrees (<root>/<project>/<name>).
+// Override with $HEARTH_HOOK_ORCA_ROOT for tests.
+const orcaWorkspacesRoot = "/home/eric/data2/orca"
+
+func isolatedWorktreeRoots() []string {
+	orca := orcaWorkspacesRoot
+	if v := os.Getenv("HEARTH_HOOK_ORCA_ROOT"); v != "" {
+		orca = v
+	}
+	roots := []string{project.Data2WorktreesRoot(), orca}
+	for i, r := range roots {
+		roots[i] = realpathBest(filepath.Clean(r))
+	}
+	return roots
 }
 
 // checkAgentNoIsolation returns true (condition holds → should block) when

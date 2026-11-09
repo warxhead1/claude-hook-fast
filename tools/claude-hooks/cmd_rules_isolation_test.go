@@ -107,6 +107,68 @@ func TestCheckAgentNoIsolation(t *testing.T) {
 	}
 }
 
+// A session living in a data2 or Orca linked worktree is already isolated, so
+// its unisolated dispatches must not be blocked. A primary clone under the same
+// roots, and a linked worktree elsewhere, stay guarded.
+func TestCheckAgentNoIsolationData2Worktrees(t *testing.T) {
+	tmp := t.TempDir()
+	data2 := filepath.Join(tmp, "data2", "worktrees")
+	orca := filepath.Join(tmp, "data2", "orca")
+	t.Setenv("HEARTH_HOOK_DATA2_WORKTREES_ROOT", data2)
+	t.Setenv("HEARTH_HOOK_ORCA_ROOT", orca)
+
+	linked := func(dir string) string {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitfile := "gitdir: /x/.git/worktrees/" + filepath.Base(dir) + "\n"
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte(gitfile), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	primary := func(dir string) string {
+		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	data2WT := linked(filepath.Join(data2, "nervous-bus", "session-miner"))
+	data2Sub := filepath.Join(data2WT, "adapters", "reflex-recorder")
+	if err := os.MkdirAll(data2Sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orcaWT := linked(filepath.Join(orca, "claude-hook-fast", "some-task"))
+	data2Clone := primary(filepath.Join(data2, "scratch-clone"))
+	elsewhereWT := linked(filepath.Join(tmp, "projects", "hearth-loom", "main"))
+	shared := primary(filepath.Join(tmp, "projects", "hearth"))
+
+	gp := `{"subagent_type":"general-purpose"}`
+	cases := []struct {
+		name string
+		cwd  string
+		want bool
+	}{
+		{"data2 linked worktree -> pass", data2WT, false},
+		{"subdir of data2 linked worktree -> pass", data2Sub, false},
+		{"orca linked worktree -> pass", orcaWT, false},
+		{"primary clone under data2 -> block", data2Clone, true},
+		{"linked worktree outside data2 -> block", elsewhereWT, true},
+		{"shared primary checkout -> block", shared, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := checkAgentNoIsolation(c.cwd, []byte(gp)); got != c.want {
+				t.Errorf("checkAgentNoIsolation(%q) = %v, want %v", c.cwd, got, c.want)
+			}
+		})
+	}
+}
+
 func TestCheckWorkflowPartialIsolation(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "hearth")
