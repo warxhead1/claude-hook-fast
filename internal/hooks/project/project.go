@@ -183,6 +183,10 @@ func fromData2WorktreesLayout(cwd, root string) (canonical, worktree string, ok 
 	return can, wt, true
 }
 
+// Data2WorktreesRoot is the root every agent and isolated-lane worktree lives
+// under (env override honored), for callers outside this package.
+func Data2WorktreesRoot() string { return data2WorktreesRoot() }
+
 func data2WorktreesRoot() string {
 	if v := os.Getenv("HEARTH_HOOK_DATA2_WORKTREES_ROOT"); v != "" {
 		return filepath.Clean(v)
