@@ -173,6 +173,29 @@ func TestNbusActivity_InterruptAndNonBashFailure(t *testing.T) {
 	}
 }
 
+func TestBashGitOps(t *testing.T) {
+	cases := []struct{ cmd, want string }{
+		{`cd x && git add a.go && git commit -m "SECRET msg" && git push -u origin b`, "git add git commit git push"},
+		{"git -C /home/eric/projects/r commit -F - <<'EOF'\nbody\nEOF", "git commit"},
+		{"git -c user.name=x checkout -- src/a.rs", "git checkout"},
+		{"timeout 60 git push -q", "git push"},
+		{"git status; git status --short", "git status"},
+		{"git frobnicate SECRET", ""},
+		{"echo git commit", ""},
+		{"gh pr create", ""},
+	}
+	for _, c := range cases {
+		if got := bashGitOps(c.cmd); got != c.want {
+			t.Errorf("bashGitOps(%q) = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{"command": `git commit -m "SECRET-GIT-7c7c"`})
+	s := boundToolSummary("Bash", raw)
+	if strings.Contains(s, "SECRET") || !strings.Contains(s, `"git_ops":"git commit"`) {
+		t.Errorf("tool_summary = %s", s)
+	}
+}
+
 func TestToolSummary_SkillName(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"skill": "code-review:code-review", "args": "SECRET-ARGS-1a1a"})
 	s := boundToolSummary("Skill", raw)
