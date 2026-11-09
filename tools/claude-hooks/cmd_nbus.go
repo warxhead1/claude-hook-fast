@@ -183,11 +183,21 @@ func cmdNbusActivity() {
 	}
 
 	// tool_is_error + tool_error_type: structured outcome for failure detection.
-	if in.ToolIsError {
+	// PostToolUse fires only on success, so a failed call reaches the bus only
+	// when this handler is also wired to PostToolUseFailure.
+	failed := isToolFailure(in)
+	switch {
+	case failed:
+		env["tool_is_error"] = true
+		env["tool_error_type"] = failureErrorType(in)
+	case in.ToolIsError:
 		env["tool_is_error"] = true
 		if errType := extractToolErrorType(in.ToolResponse); errType != "" {
 			env["tool_error_type"] = errType
 		}
+	}
+	if in.DurationMS > 0 {
+		env["duration_ms"] = int64(in.DurationMS)
 	}
 
 	// Token usage: cheap tail-read of the transcript (last 8 KB only).
@@ -210,6 +220,10 @@ func cmdNbusActivity() {
 
 	publishNbusEnvelope(chanAgentActivity, env, can)
 
+	// A failed call has no tool_response: nothing to join, scan or answer.
+	if failed {
+		return
+	}
 	handleAgentToolReturn(in)
 	scanTranscriptNotifications(in)
 
@@ -253,7 +267,7 @@ func buildActivityEnvelope(in event.HookInput) (map[string]any, string) {
 	env["tool_name"] = in.ToolName
 	env["tool_summary"] = boundToolSummary(in.ToolName, in.ToolInput)
 	if in.ToolName != "Grep" && in.ToolName != "Glob" {
-		env["tool_response_summary"] = boundedToolResponseSummary(in.ToolResponse)
+		env["tool_response_summary"] = activityResponseSummary(in)
 	}
 	if res := extractResources(in.ToolName, in.EffectiveCWD(), in.ToolInput); len(res) > 0 {
 		env["resources"] = res
@@ -1510,7 +1524,16 @@ func boundToolSummary(toolName string, raw json.RawMessage) string {
 		if c, ok := str("command"); ok {
 			out["command"] = bashVerbs(c)
 			out["command_bytes"] = len(c)
+			if class, phrase := classifyVerify(c); class != "" {
+				out["verify_class"] = class
+				out["verify_cmd"] = phrase
+			}
 		}
+	case "Skill":
+		if s, ok := str("skill"); ok && skillNameChars.MatchString(s) {
+			out["skill"] = s
+		}
+		putLen("args_bytes", "args")
 	case "Agent", "Task", "Workflow":
 		for _, k := range []string{"description", "subagent_type", "model", "name"} {
 			if s, ok := str(k); ok {
@@ -1575,6 +1598,41 @@ func stripURLSecrets(raw string) string {
 		return ""
 	}
 	return u.Scheme + "://" + u.Hostname() + u.Path
+}
+
+// skillNameChars admits skill ids ("beads", "code-review:code-review",
+// "apps/web:deploy"); anything else is dropped rather than emitted.
+var skillNameChars = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$`)
+
+// activityResponseSummary is tool_response_summary for an activity event: the
+// failure summary for PostToolUseFailure, else size and error flag, plus the
+// verify outcome, interrupt and background-launch flags for Bash.
+func activityResponseSummary(in event.HookInput) string {
+	if isToolFailure(in) {
+		return failureResponseSummary(in)
+	}
+	s := boundedToolResponseSummary(in.ToolResponse)
+	if in.ToolName != "Bash" || s == "" {
+		return s
+	}
+	outcome, interrupted, background := bashVerifyOutcome(claimGateBashCommand(in.ToolInput), in.ToolResponse)
+	if outcome == "" && !interrupted && !background {
+		return s
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(s), &m) != nil {
+		return s
+	}
+	if outcome != "" {
+		m["verify_outcome"] = outcome
+	}
+	if interrupted {
+		m["interrupted"] = true
+	}
+	if background {
+		m["background"] = true
+	}
+	return marshalSummary(m)
 }
 
 // boundedToolResponseSummary reports only the size and error flag of a tool

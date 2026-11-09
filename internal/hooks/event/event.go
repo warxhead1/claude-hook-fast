@@ -90,6 +90,14 @@ type HookInput struct {
 	// carries an error payload). Passed by Claude Code on stdin since ~2.1.
 	ToolIsError bool `json:"tool_is_error"`
 
+	// HookEventName names the firing event (PostToolUse, PostToolUseFailure,
+	// ...). PostToolUseFailure carries no tool_response: the failure text is
+	// in Error (Bash: "Exit code N\n..."), IsInterrupt marks a user interrupt
+	// and DurationMS is the tool's run time.
+	HookEventName string  `json:"hook_event_name"`
+	IsInterrupt   bool    `json:"is_interrupt"`
+	DurationMS    float64 `json:"duration_ms"`
+
 	// opencode-shape aliases. Populated only when the canonical field
 	// is empty (Parse() handles the merge).
 	SessionIDAlt string `json:"sessionID"`
