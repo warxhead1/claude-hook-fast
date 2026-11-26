@@ -101,6 +101,8 @@ func main() {
 		cmdCleanupTmp()
 	case "dispatch-model-guard":
 		cmdDispatchModelGuard()
+	case "hosted-runner-guard":
+		cmdHostedRunnerGuard()
 	case "brief-lint":
 		cmdBriefLint()
 	case "hardcoded-constants-guard":
