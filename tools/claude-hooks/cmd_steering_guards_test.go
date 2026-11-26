@@ -35,6 +35,8 @@ func TestHostedRunnerLabel(t *testing.T) {
 		"    runs-on: \"ubuntu-22.04\"",
 		"    runs-on: fancy-latest",
 		"  - runs-on: ubuntu-latest # note",
+		"    strategy:\n      matrix:\n        os: [ubuntu-latest, self-hosted]\n    runs-on: ${{ matrix.os }}\n",
+		"    strategy:\n      matrix:\n        include:\n          - os: macos-14\n    runs-on: ${{ matrix.os }}\n",
 	}
 	for _, c := range block {
 		if hostedRunnerLabel(c) == "" {
@@ -49,6 +51,7 @@ func TestHostedRunnerLabel(t *testing.T) {
 		"    # runs-on: ubuntu-latest",
 		"    name: ubuntu-latest smoke",
 		"    runs-on: self-hosted # not ubuntu-latest",
+		"    strategy:\n      matrix:\n        os: [self-hosted]  # was ubuntu-latest\n    runs-on: ${{ matrix.os }}\n",
 	}
 	for _, c := range pass {
 		if l := hostedRunnerLabel(c); l != "" {

@@ -89,7 +89,29 @@ var (
 // hostedRunnerLabel returns the first GitHub-hosted label on a runs-on line,
 // or "". A line naming self-hosted passes.
 func hostedRunnerLabel(content string) string {
-	for _, line := range strings.Split(content, "\n") {
+	lines := strings.Split(content, "\n")
+	matrixDriven := false
+	for _, line := range lines {
+		if m := runsOnLine.FindStringSubmatch(line); m != nil && strings.Contains(m[1], "matrix.") {
+			matrixDriven = true
+		}
+	}
+	if matrixDriven {
+		// runs-on reads a matrix value, so the hosted label sits on another line
+		// (e.g. `os: [ubuntu-latest]`). Check every non-comment line.
+		for _, line := range lines {
+			val := line
+			if i := strings.Index(val, "#"); i >= 0 {
+				val = val[:i]
+			}
+			// Each matrix entry is its own runner, so a self-hosted sibling
+			// does not excuse a hosted one on the same line.
+			if h := hostedLabel.FindStringSubmatch(val); h != nil {
+				return h[1]
+			}
+		}
+	}
+	for _, line := range lines {
 		m := runsOnLine.FindStringSubmatch(line)
 		if m == nil {
 			continue
