@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/warxhead1/claude-hook-fast/internal/hooks/event"
 )
 
 // gitWorktreeRe extracts the primary repo path from a worktree's `.git`
@@ -17,10 +19,7 @@ import (
 var gitWorktreeRe = regexp.MustCompile(`(.*)/\.git/worktrees/`)
 
 // pyBasename mirrors Python's os.path.basename: the tail after the last
-// "/", which is "" for an empty string or a path ending in "/". Go's
-// filepath.Base normalizes ("" -> ".", trailing slash -> last segment
-// anyway) in ways that would silently diverge from the Python script's
-// behavior at the empty-path fallback below.
+// "/", which is "" for an empty string or a path ending in "/".
 func pyBasename(s string) string {
 	if s == "" {
 		return ""
@@ -29,16 +28,12 @@ func pyBasename(s string) string {
 	return s[idx+1:]
 }
 
-// repoSplit is a byte-for-byte port of the Python script's repo_split:
-// walk up from cwd looking for a .git marker. A .git directory means cwd
-// (or an ancestor) IS the primary checkout. A .git file is a worktree
-// pointer; when its gitdir matches ".../.git/worktrees/", the primary
-// repo's basename is the project and the worktree directory's own
-// basename is the worktree. Falls back to the basename of the ORIGINAL
-// (pre-resolution) path argument if no .git is ever found — matching the
-// Python script's `os.path.basename(path or "") or "unknown"`, which
-// deliberately does NOT fall back to cwd even though the walk itself
-// does.
+// repoSplit walks up from path looking for a .git marker. A .git directory
+// means path (or an ancestor) is the primary checkout. A .git file is a
+// worktree pointer; when its gitdir matches ".../.git/worktrees/", the
+// primary repo's basename is the project and the worktree directory's own
+// basename is the worktree. Falls back to the basename of the original
+// path argument if no .git is found.
 func repoSplit(path string) (project, worktree string) {
 	walk := path
 	if walk == "" {
@@ -98,10 +93,8 @@ func pyTimestamp() string {
 	return fmt.Sprintf("%s.%06dZ", time.Unix(sec, 0).UTC().Format("2006-01-02T15:04:05"), frac)
 }
 
-// firstWorkspacePath mirrors `(payload.get("workspacePaths") or
-// [os.getcwd()])[0]`'s workspacePaths half: returns "" when the key is
-// absent, not a list, or an empty list, leaving the os.Getwd() fallback
-// to the caller.
+// firstWorkspacePath returns the first element of payload.workspacePaths,
+// or "" when absent or empty.
 func firstWorkspacePath(payload orderedMap) string {
 	v, ok := payload.Get("workspacePaths")
 	if !ok {
@@ -115,35 +108,76 @@ func firstWorkspacePath(payload orderedMap) string {
 	return s
 }
 
-// buildEnvelope is a port of the Python script's envelope(): it does NOT
-// strip empty-string fields — that happens once, explicitly, via
-// compactEnvelope, after any subcommand-specific fields (termination_
-// reason, error) have been added, mirroring the Python publish()
-// function's filtering happening at send time on a still-unfiltered env.
-func buildEnvelope(payload orderedMap, event, toolName, toolSummary string) (env map[string]any, project string) {
-	cwd := firstWorkspacePath(payload)
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+func effectiveCWD(payload orderedMap) string {
+	if cwd := payload.GetString("cwd"); cwd != "" {
+		return cwd
 	}
+	if cwd := firstWorkspacePath(payload); cwd != "" {
+		return cwd
+	}
+	cwd, _ := os.Getwd()
+	return cwd
+}
+
+// agyPaneID returns the pane identifier Hearth's pane arbiter keys on:
+// zellij:<session>:<pane> (or bare ZELLIJ_PANE_ID when session name is unset),
+// raw tmux "%N", or "orca:<handle>" from ORCA_TERMINAL_HANDLE.
+func agyPaneID() string {
+	if s, p := os.Getenv("ZELLIJ_SESSION_NAME"), os.Getenv("ZELLIJ_PANE_ID"); s != "" && p != "" {
+		return "zellij:" + s + ":" + p
+	}
+	if p := os.Getenv("ZELLIJ_PANE_ID"); p != "" {
+		return p
+	}
+	if p := os.Getenv("TMUX_PANE"); p != "" {
+		return p
+	}
+	if h := event.OrcaTerminalHandle(); h != "" {
+		return "orca:" + h
+	}
+	return ""
+}
+
+// stampOrcaIdentity adds the Orca managed_by/terminal/worktree/tab fields to
+// env when the hook runs inside an Orca-managed PTY (matching Claude Code's
+// stampOrcaIdentity in tools/claude-hooks/cmd_nbus.go).
+func stampOrcaIdentity(env map[string]any) {
+	if h := event.OrcaTerminalHandle(); h != "" {
+		env["managed_by"] = "orca"
+		env["orca_terminal"] = h
+		env["orca_worktree_id"] = os.Getenv("ORCA_WORKTREE_ID")
+		env["orca_tab_id"] = os.Getenv("ORCA_TAB_ID")
+	} else if os.Getenv("ORCA_HISTFILE") != "" {
+		env["managed_by"] = "orca"
+	}
+}
+
+// buildEnvelope builds the base nervous-bus envelope for agy lifecycle
+// and activity events, including Orca terminal identity and qualified pane.
+func buildEnvelope(payload orderedMap, eventName, toolName, toolSummary string) (env map[string]any, project string) {
+	cwd := effectiveCWD(payload)
 	proj, wt := repoSplit(cwd)
 	sid := payload.GetString("conversationId")
 	env = map[string]any{
-		"ts":              pyTimestamp(),
-		"event":           event,
-		"agent":           "antigravity",
-		"agent_kind":      "antigravity-cli",
-		"agent_id":        sid,
-		"session_id":      sid,
-		"project":         proj,
-		"worktree":        wt,
-		"display":         displayName(proj, wt),
-		"cwd":             cwd,
-		"model":           payload.GetString("modelName"),
-		"source_kind":     "antigravity-cli",
-		"transcript_path": payload.GetString("transcriptPath"),
-		"pane_id":         firstNonEmptyEnv("ZELLIJ_PANE_ID", "TMUX_PANE"),
-		"session_name":    os.Getenv("ZELLIJ_SESSION_NAME"),
+		"ts":                pyTimestamp(),
+		"event":             eventName,
+		"agent":             "antigravity",
+		"agent_kind":        "antigravity-cli",
+		"agent_id":          sid,
+		"session_id":        sid,
+		"conversation_id":   sid,
+		"project":           proj,
+		"worktree":          wt,
+		"display":           displayName(proj, wt),
+		"cwd":               cwd,
+		"model":             payload.GetString("modelName"),
+		"source_kind":       "antigravity-cli",
+		"transcript_path":   payload.GetString("transcriptPath"),
+		"pane_id":           agyPaneID(),
+		"pane_id_qualified": event.PaneIDQualified(),
+		"session_name":      os.Getenv("ZELLIJ_SESSION_NAME"),
 	}
+	stampOrcaIdentity(env)
 	if toolName != "" {
 		env["tool_name"] = toolName
 	}
@@ -153,18 +187,7 @@ func buildEnvelope(payload orderedMap, event, toolName, toolSummary string) (env
 	return env, proj
 }
 
-func firstNonEmptyEnv(names ...string) string {
-	for _, n := range names {
-		if v := os.Getenv(n); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// compactEnvelope removes keys whose value is "" or nil, matching the
-// Python publish() filter `{k: v for k, v in env.items() if v not in
-// ("", None)}`.
+// compactEnvelope removes keys whose value is "" or nil.
 func compactEnvelope(env map[string]any) map[string]any {
 	for k, v := range env {
 		if v == nil {
@@ -178,21 +201,34 @@ func compactEnvelope(env map[string]any) map[string]any {
 	return env
 }
 
-// toolInfo is a port of the Python script's tool_info(): the primary
-// command/description summary preferred over a raw json.dumps(args)
-// fallback, with an appended " [error: ...]" suffix when the payload
-// carries a truthy error.
-func toolInfo(payload orderedMap) (name, summary string) {
-	var tc orderedMap
+func toolCallMap(payload orderedMap) orderedMap {
 	if v, ok := payload.Get("toolCall"); ok {
-		tc, _ = v.(orderedMap)
+		tc, _ := v.(orderedMap)
+		return tc
 	}
-	name = tc.GetString("name")
+	return nil
+}
 
-	var args orderedMap
+func toolCallID(payload orderedMap) string {
+	return toolCallMap(payload).GetString("id")
+}
+
+func toolCallArgs(payload orderedMap) orderedMap {
+	tc := toolCallMap(payload)
 	if v, ok := tc.Get("args"); ok {
-		args, _ = v.(orderedMap)
+		args, _ := v.(orderedMap)
+		return args
 	}
+	return nil
+}
+
+// toolInfo extracts the tool name and a bounded summary (preferring
+// CommandLine/command/description over raw json.dumps(args)), appending
+// " [error: ...]" when the payload carries a truthy error.
+func toolInfo(payload orderedMap) (name, summary string) {
+	tc := toolCallMap(payload)
+	name = tc.GetString("name")
+	args := toolCallArgs(payload)
 	for _, key := range []string{"CommandLine", "command", "description"} {
 		if v, ok := args.Get(key); ok {
 			if s, ok2 := v.(string); ok2 && s != "" {
@@ -208,6 +244,42 @@ func toolInfo(payload orderedMap) (name, summary string) {
 		summary = truncateRunes(summary+" [error: "+pyStr(errv)+"]", 200)
 	}
 	return name, summary
+}
+
+// extractAgyResources extracts literal file resource touches for agy's
+// file-oriented tools (read_file, write_file, edit_file, view_file),
+// matching the {ref, intent} shape in bus.agent.activity.v1.
+func extractAgyResources(toolName, cwd string, args orderedMap) []map[string]string {
+	if toolName == "" || len(args) == 0 {
+		return nil
+	}
+	var intent string
+	switch toolName {
+	case "read_file", "view_file", "ReadFile":
+		intent = "read"
+	case "write_file", "edit_file", "WriteFile", "EditFile", "replace_file_content", "multi_replace_file_content":
+		intent = "write"
+	default:
+		return nil
+	}
+	var p string
+	for _, k := range []string{"Path", "TargetFile", "file_path", "path"} {
+		if s := args.GetString(k); s != "" {
+			p = s
+			break
+		}
+	}
+	if p == "" || strings.ContainsAny(p, "*?$~`") {
+		return nil
+	}
+	if !filepath.IsAbs(p) && cwd != "" {
+		p = filepath.Join(cwd, p)
+	}
+	p = filepath.Clean(p)
+	if len(p) > 1024 {
+		return nil
+	}
+	return []map[string]string{{"ref": "file:" + p, "intent": intent}}
 }
 
 func jsonMarshal(env map[string]any) (string, error) {
