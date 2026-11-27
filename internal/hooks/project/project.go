@@ -44,6 +44,7 @@ package project
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -51,6 +52,10 @@ import (
 // <project>/<wt> layout lives. Operator convention. Override with
 // $HEARTH_HOOK_PROJECTS_ROOT for tests or non-default layouts.
 const knownProjectsRoot = "/home/eric/projects"
+
+// knownData2OrcaRoot holds Orca workspaces, <root>/<project>/<workspace>.
+// Override with $HEARTH_HOOK_DATA2_ORCA_ROOT.
+const knownData2OrcaRoot = "/home/eric/data2/orca"
 
 // knownData2WorktreesRoot is the prefix beneath which every dispatched-
 // agent / isolated-lane worktree lives per the 2026-08-24 relocation
@@ -76,6 +81,17 @@ const knownData2WorktreesRoot = "/home/eric/data2/worktrees"
 func Resolve(cwd string) (canonical, worktree string) {
 	if cwd == "" {
 		return "unknown", ""
+	}
+
+	// Cron lanes (auto-<family>-run-<N>-<ts>) are labelled by family, wherever
+	// they sit: the per-run directory and its container are never the project.
+	if fam, seg, ok := cronFamily(cwd); ok {
+		return fam, seg
+	}
+
+	// Orca workspaces: <data2 orca root>/<project>/<workspace>[/...].
+	if can, wt, ok := fromPrefixLayout(cwd, data2OrcaRoot()); ok {
+		return can, wt
 	}
 
 	// Dispatched-agent / isolated-lane worktrees live under a wholly
@@ -179,8 +195,112 @@ func fromData2WorktreesLayout(cwd, root string) (canonical, worktree string, ok 
 		return "", "", false
 	}
 	can := parts[0]
+	// <can> may be a lane container (edge-and-analysis, uipolish), not the repo.
+	// The worktree's own .git file names the repo; for a deleted worktree the
+	// surviving siblings vote and must agree.
+	if repo := repoOfWorktree(filepath.Join(rootClean, parts[0], parts[1])); repo != "" {
+		can = repo
+	} else if repo := containerVote(filepath.Join(rootClean, parts[0])); repo != "" {
+		can = repo
+	}
 	wt := strings.Join(parts[1:], string(filepath.Separator))
 	return can, wt, true
+}
+
+// fromPrefixLayout matches <root>/<project>/<name>[/...] with no repo lookup.
+func fromPrefixLayout(cwd, root string) (canonical, worktree string, ok bool) {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(cwd))
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		return "", "", false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) < 2 || strings.HasPrefix(parts[0], "_") || strings.HasPrefix(parts[0], ".") {
+		return "", "", false
+	}
+	return parts[0], strings.Join(parts[1:], string(filepath.Separator)), true
+}
+
+var cronRe = regexp.MustCompile(`(?:^|-)(auto-.+?)-run-\d+-\d{8}T\d{4,6}Z?$`)
+
+// cronFamily mirrors nervous-bus adapters/transcripts/project.py _cron_family.
+func cronFamily(cwd string) (family, segment string, ok bool) {
+	parts := strings.Split(filepath.Clean(cwd), string(filepath.Separator))
+	for i := len(parts) - 1; i >= 0; i-- {
+		if m := cronRe.FindStringSubmatch(parts[i]); m != nil {
+			return m[1], parts[i], true
+		}
+	}
+	return "", "", false
+}
+
+// repoOfWorktree reads <dir>/.git. A linked worktree's .git is a file
+// "gitdir: <repo>/.git/worktrees/<id>" (or <repo>/.bare/worktrees/<id>, or
+// <repo>.git/worktrees/<id>); the repo is the directory that holds it.
+// Returns "" for a standalone clone, a missing dir, or any other shape.
+func repoOfWorktree(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(line, "gitdir:") {
+		return ""
+	}
+	gd := filepath.Clean(strings.TrimSpace(strings.TrimPrefix(line, "gitdir:")))
+	sep := string(filepath.Separator)
+	i := strings.LastIndex(gd, sep+"worktrees"+sep)
+	if i < 0 {
+		return ""
+	}
+	common := gd[:i]
+	switch filepath.Base(common) {
+	case ".git", ".bare":
+		common = filepath.Dir(common)
+	default:
+		common = strings.TrimSuffix(common, ".git")
+	}
+	name := filepath.Base(common)
+	if name == "." || name == sep {
+		return ""
+	}
+	return name
+}
+
+const containerVoteKids = 40
+
+// containerVote names the repo of a lane container from the worktrees still in
+// it. Every child that is a linked worktree votes; one disagreement means no answer.
+func containerVote(container string) string {
+	ents, err := os.ReadDir(container)
+	if err != nil {
+		return ""
+	}
+	seen := ""
+	n := 0
+	for _, e := range ents {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		if n++; n > containerVoteKids {
+			break
+		}
+		repo := repoOfWorktree(filepath.Join(container, e.Name()))
+		if repo == "" {
+			continue
+		}
+		if seen != "" && seen != repo {
+			return ""
+		}
+		seen = repo
+	}
+	return seen
+}
+
+func data2OrcaRoot() string {
+	if v := os.Getenv("HEARTH_HOOK_DATA2_ORCA_ROOT"); v != "" {
+		return filepath.Clean(v)
+	}
+	return knownData2OrcaRoot
 }
 
 // Data2WorktreesRoot is the root every agent and isolated-lane worktree lives
