@@ -22,6 +22,12 @@ func clearPaneEnv(t *testing.T) {
 	t.Setenv("ZELLIJ_PANE_ID", "")
 	t.Setenv("TMUX_PANE", "")
 	t.Setenv("ZELLIJ_SESSION_NAME", "")
+	t.Setenv("ORCA_TERMINAL_HANDLE", "")
+	t.Setenv("ORCA_TAB_ID", "")
+	t.Setenv("ORCA_WORKTREE_ID", "")
+	t.Setenv("ORCA_HISTFILE", "")
+	t.Setenv("HEARTH_BINDINGS_DIR", t.TempDir())
+	t.Setenv("NEEDS_YOU_HOME", t.TempDir())
 }
 
 func stubPublish(t *testing.T) *[]capturedPublish {
@@ -101,7 +107,7 @@ func TestPostToolWithCommand_MatchesPythonGolden(t *testing.T) {
 	got := decodeEnvelope(t, c.Payload)
 	want := map[string]any{
 		"event": "tool_call", "agent": "antigravity", "agent_kind": "antigravity-cli",
-		"agent_id": "conv-abc123", "session_id": "conv-abc123",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
 		"project": project, "worktree": worktree,
 		"display": project + " [" + worktree + "]", "cwd": repo,
 		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
@@ -123,7 +129,7 @@ func TestPostToolNoName_IsHeartbeat(t *testing.T) {
 	got := decodeEnvelope(t, (*calls)[0].Payload)
 	want := map[string]any{
 		"event": "heartbeat", "agent": "antigravity", "agent_kind": "antigravity-cli",
-		"agent_id": "conv-abc123", "session_id": "conv-abc123",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
 		"project": project, "worktree": worktree,
 		"display": project + " [" + worktree + "]", "cwd": repo,
 		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
@@ -141,13 +147,16 @@ func TestPostToolError_AppendsSuffixAndSharesTruncationBudget(t *testing.T) {
 	got := decodeEnvelope(t, (*calls)[0].Payload)
 	want := map[string]any{
 		"event": "tool_call", "agent": "antigravity", "agent_kind": "antigravity-cli",
-		"agent_id": "conv-err1", "session_id": "conv-err1",
+		"agent_id": "conv-err1", "session_id": "conv-err1", "conversation_id": "conv-err1",
 		"project": project, "worktree": worktree,
 		"display": project + " [" + worktree + "]", "cwd": repo,
 		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
 		"transcript_path": "/tmp/t.jsonl",
 		"tool_name":       "EditFile",
 		"tool_summary":    `{"path": "/etc/hosts"} [error: permission denied]`,
+		"tool_is_error":   true,
+		"tool_error_type": "error",
+		"resources":       []any{map[string]any{"intent": "write", "ref": "file:/etc/hosts"}},
 	}
 	assertEnvelope(t, got, want)
 }
@@ -165,12 +174,13 @@ func TestPostToolJSONArgsFallback_MatchesPythonDumpsSpacing(t *testing.T) {
 	got := decodeEnvelope(t, (*calls)[0].Payload)
 	want := map[string]any{
 		"event": "tool_call", "agent": "antigravity", "agent_kind": "antigravity-cli",
-		"agent_id": "conv-json1", "session_id": "conv-json1",
+		"agent_id": "conv-json1", "session_id": "conv-json1", "conversation_id": "conv-json1",
 		"project": project, "worktree": worktree,
 		"display": project + " [" + worktree + "]", "cwd": repo,
 		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
 		"tool_name":    "ReadFile",
 		"tool_summary": `{"path": "/etc/hosts", "lines": 100}`,
+		"resources":    []any{map[string]any{"intent": "read", "ref": "file:/etc/hosts"}},
 	}
 	assertEnvelope(t, got, want)
 }
@@ -189,7 +199,7 @@ func TestPreInvocationFirst_PublishesBothChannelsIdentically(t *testing.T) {
 	}
 	want := map[string]any{
 		"event": "started", "agent": "antigravity", "agent_kind": "antigravity-cli",
-		"agent_id": "conv-abc123", "session_id": "conv-abc123",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
 		"project": project, "worktree": worktree,
 		"display": project + " [" + worktree + "]", "cwd": repo,
 		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
@@ -209,7 +219,7 @@ func TestPreInvocationSecond_IsNoop(t *testing.T) {
 	}
 }
 
-func TestStopPlain_PublishesEndedToBothChannels(t *testing.T) {
+func TestStopPlain_PublishesEndedActivityAndTurnEndSession(t *testing.T) {
 	repo, project, worktree := repoWorktree(t)
 	calls := stubPublish(t)
 	payload := `{"workspacePaths":["` + repo + `"],"conversationId":"conv-abc123","modelName":"gemini-3-pro","transcriptPath":"/home/eric/.gemini/transcripts/conv-abc123.jsonl"}`
@@ -218,16 +228,24 @@ func TestStopPlain_PublishesEndedToBothChannels(t *testing.T) {
 	if len(*calls) != 2 {
 		t.Fatalf("expected 2 publishes, got %d", len(*calls))
 	}
-	want := map[string]any{
+	wantAct := map[string]any{
 		"event": "ended", "agent": "antigravity", "agent_kind": "antigravity-cli",
-		"agent_id": "conv-abc123", "session_id": "conv-abc123",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
 		"project": project, "worktree": worktree,
 		"display": project + " [" + worktree + "]", "cwd": repo,
 		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
 		"transcript_path": "/home/eric/.gemini/transcripts/conv-abc123.jsonl",
 	}
-	assertEnvelope(t, decodeEnvelope(t, (*calls)[0].Payload), want)
-	assertEnvelope(t, decodeEnvelope(t, (*calls)[1].Payload), want)
+	wantSess := map[string]any{
+		"event": "turn_end", "agent": "antigravity", "agent_kind": "antigravity-cli",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
+		"project": project, "worktree": worktree,
+		"display": project + " [" + worktree + "]", "cwd": repo,
+		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
+		"transcript_path": "/home/eric/.gemini/transcripts/conv-abc123.jsonl",
+	}
+	assertEnvelope(t, decodeEnvelope(t, (*calls)[0].Payload), wantAct)
+	assertEnvelope(t, decodeEnvelope(t, (*calls)[1].Payload), wantSess)
 }
 
 func TestStopTermination_PassesReasonThroughVerbatim(t *testing.T) {
@@ -236,16 +254,24 @@ func TestStopTermination_PassesReasonThroughVerbatim(t *testing.T) {
 	payload := `{"workspacePaths":["` + repo + `"],"conversationId":"conv-abc123","modelName":"gemini-3-pro","terminationReason":"user_stop"}`
 	runStop(strings.NewReader(payload))
 
-	want := map[string]any{
+	wantAct := map[string]any{
 		"event": "ended", "agent": "antigravity", "agent_kind": "antigravity-cli",
-		"agent_id": "conv-abc123", "session_id": "conv-abc123",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
 		"project": project, "worktree": worktree,
 		"display": project + " [" + worktree + "]", "cwd": repo,
 		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
 		"termination_reason": "user_stop",
 	}
-	assertEnvelope(t, decodeEnvelope(t, (*calls)[0].Payload), want)
-	assertEnvelope(t, decodeEnvelope(t, (*calls)[1].Payload), want)
+	wantSess := map[string]any{
+		"event": "turn_end", "agent": "antigravity", "agent_kind": "antigravity-cli",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
+		"project": project, "worktree": worktree,
+		"display": project + " [" + worktree + "]", "cwd": repo,
+		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
+		"termination_reason": "user_stop",
+	}
+	assertEnvelope(t, decodeEnvelope(t, (*calls)[0].Payload), wantAct)
+	assertEnvelope(t, decodeEnvelope(t, (*calls)[1].Payload), wantSess)
 }
 
 func TestStopError_StringifiesAndTruncatesTo200Runes(t *testing.T) {
@@ -254,16 +280,24 @@ func TestStopError_StringifiesAndTruncatesTo200Runes(t *testing.T) {
 	payload := `{"workspacePaths":["` + repo + `"],"conversationId":"conv-abc123","modelName":"gemini-3-pro","error":"agent crashed unexpectedly"}`
 	runStop(strings.NewReader(payload))
 
-	want := map[string]any{
+	wantAct := map[string]any{
 		"event": "ended", "agent": "antigravity", "agent_kind": "antigravity-cli",
-		"agent_id": "conv-abc123", "session_id": "conv-abc123",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
 		"project": project, "worktree": worktree,
 		"display": project + " [" + worktree + "]", "cwd": repo,
 		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
 		"error": "agent crashed unexpectedly",
 	}
-	assertEnvelope(t, decodeEnvelope(t, (*calls)[0].Payload), want)
-	assertEnvelope(t, decodeEnvelope(t, (*calls)[1].Payload), want)
+	wantSess := map[string]any{
+		"event": "turn_end", "agent": "antigravity", "agent_kind": "antigravity-cli",
+		"agent_id": "conv-abc123", "session_id": "conv-abc123", "conversation_id": "conv-abc123",
+		"project": project, "worktree": worktree,
+		"display": project + " [" + worktree + "]", "cwd": repo,
+		"model": "gemini-3-pro", "source_kind": "antigravity-cli",
+		"error": "agent crashed unexpectedly",
+	}
+	assertEnvelope(t, decodeEnvelope(t, (*calls)[0].Payload), wantAct)
+	assertEnvelope(t, decodeEnvelope(t, (*calls)[1].Payload), wantSess)
 }
 
 // --- unit tests for the helpers golden coverage above depends on ---
