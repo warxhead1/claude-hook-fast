@@ -64,19 +64,22 @@ func assertEnvelope(t *testing.T, got, want map[string]any) {
 	}
 }
 
-// repoWorktree is the real worktree this test runs from
-// (/home/eric/data2/worktrees/claude-hook-fast/<name>), whose .git file
-// points at .../claude-hook-fast/.git/worktrees/<name> — this is the
-// live analogue of the Python script's worktree-gitdir-parsing branch,
-// exercised without any fixture fakery.
+// repoWorktree builds a linked-worktree fixture under a temp data2 root, so
+// the test gives the same answer from any checkout location. The .git file
+// carries the gitdir line git writes for a linked worktree.
 func repoWorktree(t *testing.T) (path, project, worktree string) {
 	t.Helper()
-	wd, err := os.Getwd()
-	if err != nil {
+	root := t.TempDir()
+	t.Setenv("HEARTH_HOOK_DATA2_WORKTREES_ROOT", root)
+	wt := filepath.Join(root, "claude-hook-fast", "fixture-wt")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Dir(filepath.Dir(wd)) // cmd/agy-hook -> repo root
-	return root, "claude-hook-fast", filepath.Base(root)
+	gitdir := "gitdir: /src/claude-hook-fast/.git/worktrees/fixture-wt\n"
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte(gitdir), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return wt, "claude-hook-fast", "fixture-wt"
 }
 
 func TestPostToolWithCommand_MatchesPythonGolden(t *testing.T) {
